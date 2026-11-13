@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+rel99:
+  physical:
+    initial_ul_puncturing_limit_percent: 100
+    uplink_scrambling_code_base: 12084932
+cell:
+  cell_id: 36
+  gprs_enable: true
+  hnb_identity: umts-hnb-001-01-000000000001
+  lac: 63
+  nmo: 2
+  plmn: 001-01
+  q_qual_min: -24
+  rac: 45
+  sac: 36
+  common_channels:
+    aich_power_offset_db: -10
+  physical:
+    dch_secondary_scrambling_code: 0
+    downlink_scrambling_code: 469
+  access:
+    prach:
+      dynamic_persistence_level: 1
+      scrambling_code_word_number: 0
+      signature: 13
+      subchannel: 1
+core:
+  gtpu:
+    advertise_ip: null
+    allow_ephemeral_port: false
+    bind_ip: 127.0.0.20
+    bind_port: 2152
+    release_rab_on_error_indication: false
+  hnbgw:
+    address: 127.0.0.10
+    port: 29169
+    transport: sctp
+  iuh:
+    retry_attempts: 12
+    retry_backoff_secs: 5
+radio:
+  backend: bladerf
+  bladerf_args: ''
+  bladerf_rx_sample_phase: 1
+  bladerf_rx_timestamp_offset: null
+  bladerf_stream_buffer_samples: 1024
+  bladerf_stream_buffers: 8
+  bladerf_stream_transfers: 4
+  rx_gain_db: 23.0
+  soapy_args: ''
+  tx_gain_db: 66.0
+  uarfcn_dl: 4385
+  uarfcn_ul: 4160
+  uhd_args: ''
+  uhd_rx_timestamp_offset: null
+runtime:
+  dch_cpu: 3
+  simd: auto
+hspa:
+  uplink:
+    edpcch_power_offset: 8
+    edpdch_references:
+    - etfci: 11
+      power_offset: 4
+    - etfci: 83
+      power_offset: 7
+    enabled: false
+    four_code_uplink: false
+    initial_serving_grant: 11
+    max_category: 6
+    scheduled: true
+    serving_grant: 11
+  downlink:
+    all_secondary_power_offset_db: 0.0
+    compact_common_channels: false
+    enabled: false
+    fdpch: false
+    harq_memory_bits: []
+    harq_processes: 6
+    feedback:
+      ack_nack_power_index: 0
+    measurement_power_offset_db: 12.0
+    secondary_scrambling_code: 0
+power_control:
+  uplink:
+    sir_floor_db: 12.0
+    sir_ceiling_db: 21.0
+    target_bler: 0.05
+    initial_sir_db: null
+    tpc_hold_groups: 2
+  downlink:
+    pich_power_offset_db: -10
+receiver:
+  turbo_iterations: 8
+rrc:
+  cn_drx_cycle_length_coefficient: 6
+  combined_bearer_setup: true
+  inactivity_delete_seconds: 300
+  inactivity_release_seconds: 180
+  max_allowed_ul_tx_power_dbm: 33
+  periodic_lu_timer_value: 30
+  release_transport_policy: auto
+  srnc_id: 0
+  ura_identity: 100

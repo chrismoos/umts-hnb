@@ -1,0 +1,365 @@
+syntax = "proto3";
+package umts.hnb.management.v1;
+
+service HnbManagement {
+  rpc GetStatus(GetStatusRequest) returns (StatusSnapshot);
+  rpc GetConfiguration(GetConfigurationRequest) returns (Configuration);
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (Capabilities);
+  rpc ListUes(ListUesRequest) returns (ListUesResponse);
+  rpc GetUe(GetUeRequest) returns (Ue);
+  rpc GetRadioMetrics(GetRadioMetricsRequest) returns (RadioMetrics);
+  rpc WatchMetrics(WatchMetricsRequest) returns (stream MetricsUpdate);
+  rpc WatchEvents(WatchEventsRequest) returns (stream Event);
+  rpc StartCapture(StartCaptureRequest) returns (Operation);
+  rpc StopCapture(StopCaptureRequest) returns (Operation);
+  rpc GetCapture(GetCaptureRequest) returns (Capture);
+  rpc ListCaptures(ListCapturesRequest) returns (ListCapturesResponse);
+  rpc Shutdown(ShutdownRequest) returns (Operation);
+  rpc GetOperation(GetOperationRequest) returns (Operation);
+}
+
+message GetStatusRequest {}
+message GetConfigurationRequest {}
+message GetCapabilitiesRequest {}
+message GetRadioMetricsRequest {}
+
+enum Phase {
+  PHASE_UNSPECIFIED = 0;
+  PHASE_STARTING = 1;
+  PHASE_RUNNING = 2;
+  PHASE_RECOVERING = 3;
+  PHASE_STOPPING = 4;
+  PHASE_STOPPED = 5;
+  PHASE_FAILED = 6;
+}
+
+message SnapshotIdentity {
+  string instance_id = 1;
+  uint64 sequence = 2;
+  uint64 epoch = 3;
+  uint64 uptime_ms = 4;
+  int64 observed_unix_ms = 5;
+}
+
+message StatusSnapshot {
+  SnapshotIdentity identity = 1;
+  Phase phase = 2;
+  string build_version = 3;
+  string build_commit = 4;
+  string configuration_sha256 = 5;
+  bool core_connected = 6;
+  bool radio_ready = 7;
+  uint32 registered_ues = 8;
+  uint32 active_bearers = 9;
+  uint32 pending_operations = 10;
+  string failure_reason = 11;
+  Counters counters = 12;
+  string binary_sha256 = 13;
+  bool bearer_snapshot_complete = 14;
+}
+
+message Counter { string name = 1; uint64 value = 2; }
+message Counters { repeated Counter values = 1; }
+
+// Configured RF values are declarations, not hardware readbacks or calibration.
+message Configuration {
+  string plmn = 1;
+  uint32 lac = 2;
+  uint32 rac = 3;
+  uint32 cell_id = 4;
+  uint32 uarfcn_dl = 5;
+  uint32 uarfcn_ul = 6;
+  double configured_tx_gain_db = 7;
+  double configured_rx_gain_db = 8;
+  bool hsdpa_enabled = 9;
+  bool hsupa_enabled = 10;
+  string backend = 11;
+  string configuration_sha256 = 12;
+  double configured_downlink_hz = 13;
+  double configured_uplink_hz = 14;
+  optional double applied_sample_rate_hz = 15;
+  optional uint64 device_tick_rate_hz = 16;
+}
+
+message Capabilities {
+  string api_version = 1;
+  repeated string features = 2;
+  uint32 maximum_page_size = 3;
+  uint32 maximum_capture_mib = 4;
+  uint32 maximum_capture_duration_ms = 5;
+  uint32 maximum_subscriptions = 6;
+  uint32 operation_retention_seconds = 7;
+}
+
+// A radio identifier alone cannot identify a UE across reuse or an epoch change.
+message UeRef { uint64 epoch = 1; uint32 slot = 2; uint64 generation = 3; }
+enum RrcState {
+  RRC_STATE_UNSPECIFIED = 0;
+  RRC_STATE_CONNECTING = 1;
+  RRC_STATE_CELL_FACH = 2;
+  RRC_STATE_CELL_DCH = 3;
+  RRC_STATE_RELEASING = 4;
+  RRC_STATE_FAILED = 5;
+}
+enum DomainState {
+  DOMAIN_STATE_UNSPECIFIED = 0;
+  DOMAIN_STATE_DISCONNECTED = 1;
+  DOMAIN_STATE_CONNECTED = 2;
+}
+enum BearerDomain {
+  BEARER_DOMAIN_UNSPECIFIED = 0;
+  BEARER_DOMAIN_SIGNALLING = 1;
+  BEARER_DOMAIN_CS = 2;
+  BEARER_DOMAIN_PS = 3;
+}
+enum RlcMode {
+  RLC_MODE_UNSPECIFIED = 0;
+  RLC_MODE_TM = 1;
+  RLC_MODE_UM = 2;
+  RLC_MODE_AM = 3;
+}
+enum BearerState {
+  BEARER_STATE_UNSPECIFIED = 0;
+  BEARER_STATE_PREPARING = 1;
+  BEARER_STATE_ACTIVE = 2;
+  BEARER_STATE_RELEASING = 3;
+  BEARER_STATE_FAILED = 4;
+}
+message Bearer {
+  uint32 id = 1;
+  BearerDomain domain = 2;
+  RlcMode rlc_mode = 3;
+  BearerState state = 4;
+  bool hsdpa = 5;
+  bool hsupa = 6;
+}
+message PowerControl {
+  optional double sir_db = 1;
+  optional double target_sir_db = 2;
+  optional double despread_pilot_dbfs = 3;
+  optional double pilot_coherence = 4;
+  uint64 observed_chip = 5;
+  uint64 tracking_losses = 6;
+}
+message Harq {
+  uint64 ack = 1;
+  uint64 nack = 2;
+  uint64 dtx = 3;
+  uint64 missing = 4;
+  uint64 rejected = 5;
+}
+enum HsdpaCarrierRole {
+  HSDPA_CARRIER_ROLE_UNSPECIFIED = 0;
+  HSDPA_CARRIER_ROLE_PRIMARY = 1;
+  HSDPA_CARRIER_ROLE_SECONDARY = 2;
+}
+enum HsdpaCarrierState {
+  HSDPA_CARRIER_STATE_UNSPECIFIED = 0;
+  HSDPA_CARRIER_STATE_CONFIGURED = 1;
+  HSDPA_CARRIER_STATE_ACTIVATING = 2;
+  HSDPA_CARRIER_STATE_ACTIVE = 3;
+  HSDPA_CARRIER_STATE_DEACTIVATING = 4;
+  HSDPA_CARRIER_STATE_RECOVERY_REQUIRED = 5;
+}
+message HsdpaCarrier {
+  HsdpaCarrierRole role = 1;
+  HsdpaCarrierState state = 2;
+  optional uint32 downlink_scrambling_code = 3;
+  optional uint32 uarfcn_dl = 4;
+  optional uint32 cqi = 5;
+  optional uint32 hs_pdsch_codes = 6;
+  Harq feedback = 7;
+  uint64 maximum_new_transport_bits = 8;
+  uint64 new_transport_bits = 9;
+  uint64 retry_transport_bits = 10;
+  uint64 acknowledged_transport_bits = 11;
+}
+message Ue {
+  UeRef reference = 1;
+  optional string imsi = 2;
+  RrcState rrc_state = 3;
+  DomainState cs_state = 4;
+  DomainState ps_state = 5;
+  uint64 configuration = 6;
+  repeated Bearer bearers = 7;
+  optional uint32 downlink_scrambling_code = 8;
+  optional uint32 downlink_spreading_factor = 9;
+  optional uint32 downlink_channel_code = 10;
+  optional uint32 uplink_scrambling_code = 11;
+  PowerControl power = 12;
+  Harq downlink_feedback = 13;
+  Counters counters = 14;
+  optional uint32 cqi = 15;
+  optional uint32 hs_pdsch_codes = 16;
+  // MAC payload rates are not host-received TCP throughput.
+  optional double downlink_payload_bps = 17;
+  optional double uplink_payload_bps = 18;
+  string pending_procedure = 19;
+  bool bearer_configuration_available = 20;
+  RrcReports rrc_reports = 21;
+  repeated HsdpaCarrier hsdpa_carriers = 22;
+}
+
+enum RrcProtocolError {
+  RRC_PROTOCOL_ERROR_UNSPECIFIED = 0;
+  RRC_PROTOCOL_ERROR_ENCODING = 1;
+  RRC_PROTOCOL_ERROR_MESSAGE_NOT_IMPLEMENTED = 2;
+  RRC_PROTOCOL_ERROR_RECEIVER_STATE = 3;
+  RRC_PROTOCOL_ERROR_VALUE_NOT_COMPREHENDED = 4;
+  RRC_PROTOCOL_ERROR_CONDITIONAL_INFORMATION_ELEMENT = 5;
+  RRC_PROTOCOL_ERROR_EXTENSION_NOT_COMPREHENDED = 6;
+}
+message RrcStatusReport {
+  RrcProtocolError cause = 1;
+  // TS 25.331 ReceivedMessageType enumeration value, absent when not identifiable.
+  optional uint32 rejected_message_type = 2;
+  optional uint32 transaction = 3;
+}
+enum MeasurementKind {
+  MEASUREMENT_KIND_ABSENT = 0;
+  MEASUREMENT_KIND_INTRA_FREQUENCY = 1;
+  MEASUREMENT_KIND_INTER_FREQUENCY = 2;
+  MEASUREMENT_KIND_INTER_RAT = 3;
+  MEASUREMENT_KIND_TRAFFIC_VOLUME = 4;
+  MEASUREMENT_KIND_QUALITY = 5;
+  MEASUREMENT_KIND_INTERNAL = 6;
+  MEASUREMENT_KIND_POSITIONING = 7;
+}
+message FddCellMeasurement {
+  uint32 scrambling_code = 1;
+  // Encoded TS 25.331 measurement bins, not calibrated point estimates.
+  optional uint32 rscp_code = 2;
+  optional uint32 ec_n0_code = 3;
+  optional uint32 pathloss_code = 4;
+}
+message MeasurementReport {
+  uint32 identity = 1;
+  MeasurementKind kind = 2;
+  repeated FddCellMeasurement primary_intra_frequency_cells = 3;
+  uint32 other_cell_count = 4;
+  bool has_event = 5;
+  bool has_rach_results = 6;
+  bool has_additional_results = 7;
+  bool has_extensions = 8;
+  repeated InterFrequencyCellMeasurement inter_frequency_cells = 9;
+}
+message InterFrequencyCellMeasurement {
+  optional uint32 uarfcn_dl = 1;
+  FddCellMeasurement cell = 2;
+}
+message RrcReports {
+  uint64 status_count = 1;
+  uint64 measurement_count = 2;
+  RrcStatusReport last_status = 3;
+  MeasurementReport last_measurement = 4;
+  // True only after a report for the requested identity confirms UE adoption.
+  bool measurement_control_configured = 5;
+  uint64 measurement_control_failures = 6;
+  uint64 unsupported_control_count = 7;
+  MeasurementReport last_secondary_measurement = 8;
+  bool secondary_measurement_configured = 9;
+  uint64 secondary_measurement_failures = 10;
+}
+message ListUesRequest {
+  uint32 page_size = 1;
+  // Opaque continuation token bound to a snapshot sequence.
+  string page_token = 2;
+}
+message ListUesResponse {
+  SnapshotIdentity identity = 1;
+  repeated Ue ues = 2;
+  string next_page_token = 3;
+}
+message GetUeRequest { UeRef reference = 1; }
+message RadioMetrics { SnapshotIdentity identity = 1; Counters counters = 2; repeated Ue ues = 3; }
+message WatchMetricsRequest { uint32 interval_ms = 1; }
+message MetricsUpdate {
+  RadioMetrics metrics = 1;
+  // Number of intermediate snapshots skipped for this subscriber.
+  uint64 skipped_snapshots = 2;
+}
+message WatchEventsRequest {
+  // Zero starts at the current event tail. Older retained cursors return explicit gaps.
+  uint64 after_sequence = 1;
+  string expected_instance_id = 2;
+}
+message Event {
+  uint64 sequence = 1;
+  int64 observed_unix_ms = 2;
+  string kind = 3;
+  string message = 4;
+  UeRef ue = 5;
+  uint64 lost_events = 6;
+  string operation_id = 7;
+  uint64 epoch = 8;
+  string instance_id = 9;
+}
+
+enum CaptureDirection {
+  CAPTURE_DIRECTION_UNSPECIFIED = 0;
+  CAPTURE_DIRECTION_RX = 1;
+  CAPTURE_DIRECTION_TX = 2;
+}
+enum CapturePhase {
+  CAPTURE_PHASE_UNSPECIFIED = 0;
+  CAPTURE_PHASE_PREPARING = 1;
+  CAPTURE_PHASE_RECORDING = 2;
+  CAPTURE_PHASE_FLUSHING = 3;
+  CAPTURE_PHASE_COMPLETE = 4;
+  CAPTURE_PHASE_FAILED = 5;
+}
+message Capture {
+  string id = 1;
+  uint64 epoch = 2;
+  CaptureDirection direction = 3;
+  CapturePhase phase = 4;
+  uint32 maximum_mib = 5;
+  uint32 duration_ms = 6;
+  uint64 samples = 7;
+  uint64 bytes = 8;
+  uint64 discontinuities = 9;
+  string directory = 10;
+  double sample_rate_hz = 11;
+  uint64 tick_rate_hz = 12;
+  string sample_format = 13;
+  string error = 14;
+  bool stopped_early = 15;
+}
+message CommandIdentity {
+  // UUID supplied by the client. Retries retain it and all request parameters.
+  string request_id = 1;
+  string expected_instance_id = 2;
+  uint64 expected_epoch = 3;
+}
+message StartCaptureRequest {
+  CommandIdentity command = 1;
+  CaptureDirection direction = 2;
+  uint32 duration_ms = 3;
+  uint32 maximum_mib = 4;
+}
+message StopCaptureRequest { CommandIdentity command = 1; string capture_id = 2; }
+message GetCaptureRequest { string capture_id = 1; }
+message ListCapturesRequest {}
+message ListCapturesResponse { repeated Capture captures = 1; }
+message ShutdownRequest { CommandIdentity command = 1; }
+enum OperationPhase {
+  OPERATION_PHASE_UNSPECIFIED = 0;
+  OPERATION_PHASE_QUEUED = 1;
+  OPERATION_PHASE_RUNNING = 2;
+  OPERATION_PHASE_SUCCEEDED = 3;
+  OPERATION_PHASE_FAILED = 4;
+}
+message Operation {
+  string id = 1;
+  string request_id = 2;
+  OperationPhase phase = 3;
+  string kind = 4;
+  string capture_id = 5;
+  int32 error_code = 6;
+  string error_message = 7;
+  int64 created_unix_ms = 8;
+  int64 updated_unix_ms = 9;
+}
+message GetOperationRequest {
+  oneof selector { string operation_id = 1; string request_id = 2; }
+}

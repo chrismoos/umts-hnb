@@ -1,0 +1,342 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+cell:
+  # Selects packet features. dc-hspa also requires an operator secondary-carrier UARFCN.
+  packet_modes: [rel99, hspa, hspa-plus]
+  secondary_carrier:
+    uarfcn_dl: null
+    primary_scrambling_code: null
+    # Share of total carrier power assigned to the secondary carrier.
+    power_percent: 50.0
+  gprs_enable: true
+  # combined-paging (I): core coordinates circuit paging through the packet domain.
+  # separate-paging (II): circuit and packet domains page independently.
+  # Must match core paging coordination. Does not enable voice or packet bearers.
+  nmo: separate-paging
+  # Minimum CPICH Ec/No in dB advertised for cell selection and reselection.
+  q_qual_min: -24
+  physical:
+    dch_secondary_scrambling_code: 0
+  access:
+    # Access parameters broadcast to UEs, separate from receiver detection thresholds.
+    prach:
+      dynamic_persistence_level: 1
+      initial_power_constant_db: -30
+      scrambling_code_word_number: 0
+      signature: 13
+      subchannel: 1
+  measurements:
+    request_cpich_measurements: true
+    # null requests reports without a fixed count.
+    ue_measurement_report_count: null
+    ue_measurement_interval_ms: 1000
+core:
+  hnbgw:
+    udp_encapsulation_port: null
+    udp_encapsulation_local_port: null
+  gtpu:
+    advertise_ip: null
+    allow_ephemeral_port: false
+    bind_port: 2152
+    release_rab_on_error_indication: true
+  iuh:
+    # 0 retries indefinitely after HNB-GW connection failures.
+    retry_attempts: 0
+    retry_backoff_secs: 5
+  hnbap_tmsi_registration: true
+rel99:
+  # Built-in voice and packet bearer recipe. Supported profile: standard.
+  profile: standard
+  physical:
+    initial_ul_puncturing_limit_percent: 76
+    planner:
+      budgets:
+        maximum_combinations: 1024
+        maximum_mapping_entries: 1000000
+        maximum_total_coded_bits: 500000
+        maximum_transport_coded_bits: 500000
+        maximum_user_storage_bytes: 16000000
+    uplink_scrambling_code_base: 12084932
+rrc:
+  cn_drx_cycle_length_coefficient: 6
+  combined_bearer_setup: true
+  inactivity_delete_seconds: 300
+  inactivity_release_seconds: 180
+  max_allowed_ul_tx_power_dbm: 33
+  # Periodic location update timer in six-minute units: 30 = three hours.
+  periodic_lu_timer_value: 30
+  release_complete_retransmissions: 1
+  release_transport_policy: auto
+  srnc_id: 0
+  ura_identity: 100
+diagnostics:
+  logging:
+    filter: info
+management:
+  # Relative runtime paths resolve from the launch working directory.
+  grpc:
+    administrator_certificates_sha256: []
+    administrator_socket_path: .runtime/admin.sock
+    capture_directory: .runtime/captures
+    enabled: true
+    maximum_capture_disk_mib: 2048
+    socket_path: .runtime/management.sock
+    tcp_address: null
+    tls_certificate: null
+    tls_client_ca: null
+    tls_key: null
+runtime:
+  scheduling:
+    enabled: true
+    # Pins each thread role to one logical CPU ID. null leaves placement unrestricted.
+    # control_cpu covers background and driver I/O threads. usb_cpu covers USB events.
+    # prepare/submit handle TX. receive processes RX. reader reads radio samples.
+    main_cpu: null
+    control_cpu: null
+    usb_cpu: null
+    prepare_cpu: null
+    submit_cpu: null
+    receive_cpu: null
+    reader_cpu: null
+    usb_priority: 90
+    submit_priority: 85
+    reader_priority: 85
+    prepare_priority: 80
+    receive_priority: 75
+  dch_cpu: null
+  simd: auto
+  media:
+    circuit:
+      advertise_ip: null
+      bind_ip: null
+      datagram_bytes: 2048
+      horizon_ms: 60000
+      initialization: initiate
+      payload_type: 96
+      playout_lead_ms: 40
+      repetitions: 3
+      timeout_ms: 400
+      # Iu-UP version bitmask: 1 = v1, 2 = v2, 3 = both.
+      versions: 3
+      wait_ms: 40
+    maximum_packet_bytes: 134217728
+    maximum_voice_bytes: 268435456
+  clock:
+    interval_us: 1000000
+    maximum_age_us: null
+    maximum_drift_ppm: 100
+    # A device-clock query within this time bounds the clock. A radio whose queries stay
+    # slower is calibrated from the query midpoint, assumed accurate to this window.
+    maximum_query_us: 250
+  recovery:
+    backoff_ms: 100
+    maximum_backoff_ms: 1000
+    # 0 disables automatic radio-runtime restarts.
+    maximum_restarts: 0
+  # Submission polls near its deadline when enabled. Preparation uses blocking waits.
+  spin_wait: true
+  # Locks process memory against paging. Requires an unlimited memlock limit.
+  lock_memory: false
+  # Slots per TX batch. One UMTS slot is approximately 667 microseconds.
+  tx_batch_slots: 1
+  maximum_sdu_bytes: 8192
+  queued_sdus_per_bearer: 64
+  maximum_queue_bytes: 67108864
+  rx_timeout_us: 1000
+  rx_queue_blocks: 64
+  # Initial TX lead before the first scheduled transmission.
+  startup_lead_ms: 250
+  # Lead before scheduled transmission: latest submission, earliest submission,
+  # then earliest preparation. Larger batches must fit within the submission window.
+  minimum_submission_us: 100
+  maximum_submission_us: 1425
+  maximum_preparation_us: 1525
+  idle_wait_us: 100
+  controller_idle_wait_us: 100
+  startup_timeout_ms: 5000
+  clock_stall_timeout_ms: 1000
+  join_timeout_ms: 3000
+radio:
+  tx_samples_per_chip: 2
+  tx_analog_bandwidth_hz: 5000000
+  # tx_lo_offset_hz is chosen when unset: 2.5 MHz for a single carrier on UHD, 0 with
+  # dc-hspa or another backend. The analog bandwidth widens to cover it.
+  soapy_args: ''
+  tx_antenna: null
+  rx_antenna: null
+  uhd_rx_timestamp_offset: null
+  bladerf_args: ''
+  bladerf_rx_sample_phase: 0
+  bladerf_stream_buffers: 8
+  bladerf_stream_buffer_samples: 4096
+  bladerf_stream_transfers: 4
+  bladerf_rx_timestamp_offset: null
+receiver:
+  prach:
+    # Minimum coherent signal fraction for preamble detection, not an RF power in dB.
+    minimum_coherent_fraction: 0.05
+  turbo_iterations: 4
+  filter_span_chips: 16
+  dedicated:
+    maximum_shared_bytes: 4194304
+    maximum_sample_bytes: 67108864
+    maximum_coded_bits: 8388608
+    maximum_output_bytes: 8388608
+    maximum_demultiplexed_bits: 8388608
+    maximum_bearer_bytes: 67108864
+    maximum_transmit_bits: 16777216
+    maximum_frame_bits: 262144
+    history_frames: 2
+    work_per_cycle: 16
+    command_capacity: 64
+    output_slots: 8
+    # Timing search around the predicted dedicated-channel receive position.
+    search_radius_samples: 8
+    minimum_coherent_fraction: 0.05
+    # Residual frequency tracking. update_fraction controls correction smoothing.
+    carrier_initial_hz: 0.0
+    carrier_maximum_absolute_hz: 2000.0
+    carrier_update_fraction: 0.05
+    carrier_minimum_coherence: 0.8
+    # Decoder soft-value clipping and dimensionless TFCI confidence thresholds.
+    likelihood_maximum: 128.0
+    tfci_minimum_score: 0.5
+    tfci_minimum_margin: 0.1
+    radio_link_out_of_sync_frames: 50
+    radio_link_in_sync_frames: 10
+    radio_link_failure_frames: 300
+power_control:
+  uplink:
+    sir_ceiling_db: 13.0
+    initial_sir_db: 9.0
+    sir_floor_db: 6.0
+    target_bler: 0.02
+    tpc_hold_groups: 0
+  downlink:
+    # Channel percentages allocate power, not amplitude, and must total at most 100.
+    allocation:
+      aich_percent: 0.1732142
+      broadcast_percent: 1.6282558
+      # Share of broadcast_percent reserved for synchronization channels.
+      broadcast_sync_percent: 2.0
+      # Overall digital RMS amplitude reference, separate from SDR TX gain.
+      carrier_rms: 0.2939069
+      cpich_percent: 5.477475
+      crest_reduction_enabled: true
+      dedicated_percent: 3.2239468
+      e_agch_percent: 0.16282548
+      e_hich_percent: 0.16282548
+      fach_percent: 0.26052105
+      hs_scch_percent: 0.32565132
+      hsdpa_percent: 87.777016
+      pch_percent: 0.26052105
+      # Peak headroom below digital full scale.
+      peak_margin_db: 0.1
+      pich_percent: 0.54774755
+    common_channel_offset_db: 0.0
+    dedicated:
+      downlink_offset_db: 0.0
+      downlink_minimum_offset_db: -6.0
+      tpc_offset_db: 6.0
+      tpc_maximum_observation_age_chips: 10240
+      tpc_initial_maximum_slots: 9000
+hspa:
+  downlink:
+    fdpch: false
+    compact_common_channels: true
+    measurement_power_offset_db: null
+    harq_processes: 6
+    # Per-process HARQ memory partition. Empty uses the UE capability allocation.
+    harq_memory_bits: []
+    # Downlink AM RLC PDU size for packet bearers of HSDPA-capable UEs, replacing the packet
+    # service's downlink rlc_bits. A UE takes at most 26 reordering SDUs per TTI, so small
+    # PDUs cap the rate and stop both DC-HSDPA carriers sharing a TTI.
+    rlc_pdu_bits: 4640
+    # Largest UE receiving window in PDUs used with rlc_pdu_bits. A smaller service window stays.
+    rlc_receive_window: 768
+    secondary_scrambling_code: 0
+    all_secondary_power_offset_db: 0.0
+    feedback:
+      ack_nack_power_index: 6
+      cqi_power_index: 5
+      cqi_interval_ms: 8
+    resources:
+      control_codes: 1
+      data_codes: 15
+      maximum_queue_bytes: 67108864
+      maximum_queue_bytes_per_ue: 1048576
+      maximum_tx_bytes: 33554432
+      pdus_per_queue: 256
+      pending_transmissions: 32
+      scheduling:
+        acknowledgement:
+          maximum_relative_disturbance: 1.0
+          minimum_correlation: 0.5
+          minimum_margin: 0.1
+          minimum_pilot_fraction: 0.5
+          minimum_relative_soft_power: 0.01
+        cqi:
+          maximum_relative_disturbance: 1.0
+          minimum_correlation: 0.5
+          minimum_margin: 0.1
+          minimum_pilot_fraction: 0.5
+          minimum_relative_soft_power: 0.01
+        cqi_offset_limit: 3
+        cqi_target_bler_percent: 10
+        maximum_buffer_bytes: 4000000
+        # Shared catalog admission budget. Storage is allocated as bearers are admitted.
+        maximum_cell_bytes: 3221225472
+        maximum_coded_bits: 150000
+        maximum_cqi_age_chips: 76800
+        maximum_encoder_bytes: 16000000
+        maximum_formats: 65536
+        maximum_plan_bytes: 300000000
+        maximum_ue_bytes: 640000000
+        # Extra scheduling lead ahead of the TX preparation cursor.
+        preparation_guard_us: 1000
+        selection_budget: 4096
+  uplink:
+    scheduled: true
+    rv_zero_only: false
+    four_code_uplink: true
+    max_category: 6
+    # Serving-grant indices select the permitted uplink power ratio, not a bitrate.
+    initial_serving_grant: 31
+    serving_grant: 31
+    # Encoded protocol power-offset indices, not literal dB values.
+    edpcch_power_offset: 5
+    edpdch_references:
+    - etfci: 11
+      power_offset: 11
+    - etfci: 81
+      power_offset: 25
+    resources:
+      command_capacity: 16
+      maximum_cell_receive_bytes: 4294967296
+      maximum_tx_bytes: 4194304
+      pending_transmissions: 16
+      primary_grant_refresh_ms: 1000
+      receive:
+        feedback_capacity: 4
+        iterations: 4
+        likelihood_limit: 64.0
+        maximum_catalog_bytes: 67108864
+        maximum_format_bits: 100000
+        maximum_receive_bytes: 134217728
+        minimum_control_correlation: 0.7
+        minimum_control_margin: 0.2
+        packet_bytes: 8388608
+        packet_capacity: 257
+        reorder_hold_ttis: 32
+        report_bytes: 1048576
+        report_capacity: 4
+        retained_sample_bytes: 4194304
+        scratch_bytes: 4194304
+        soft_buffer_bytes: 4194304
+      service_visits: 2
+security:
+  # UEA0 permits unciphered operation.
+  allow_uea0: true
+  allow_uea1: true
+  allow_uea2: true
+  allow_uia1: true
+  allow_uia2: true

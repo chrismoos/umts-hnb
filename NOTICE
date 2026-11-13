@@ -1,0 +1,86 @@
+umts-hnb
+========
+
+An open-source SDR-based UMTS Home NodeB (HNB) that connects to a 3GPP-standard
+HNB-GW over the Iuh interface (TS 25.467).
+
+Origin
+------
+
+This project began as a port of OpenBTS-UMTS
+<https://github.com/RangeNetworks/OpenBTS-UMTS>, an AGPLv3 UMTS base-station
+implementation by Range Networks, Inc. and contributors. The application in
+this repository is a Rust workspace. No OpenBTS-UMTS source files are
+included.
+
+"OpenBTS" is a registered trademark of Range Networks, Inc. This project does
+not use the OpenBTS name.
+
+License
+-------
+
+The project is licensed under the GNU Affero General Public License version 3
+or later (AGPL-3.0-or-later). See LICENSE for the full text.
+
+Source files carry the header:
+
+    SPDX-License-Identifier: AGPL-3.0-or-later
+
+3GPP RRC ASN.1
+--------------
+
+rust/crates/umts-rrc-schema/schema/rrc.asn1 contains the ASN.1 modules of
+3GPP TS 25.331 v19.0.1, clause 11. The specification is copyright of the 3GPP
+Organizational Partners. The file is included to generate the RRC
+message types and is not covered by this project's license.
+
+Rust RRC codecs
+---------------
+
+RRC bindings are generated at build time with rasn-compiler and use the rasn
+runtime, both licensed under MIT OR Apache-2.0.
+
+rasn-compiler is fetched from the umts branch of
+https://github.com/chrismoos/rasn-compiler, a fork of
+https://github.com/librasn/compiler containing two default-generation fixes.
+Its source retains the original attribution and license texts.
+Cargo.lock records the resolved commit.
+
+Third-party libraries
+---------------------
+
+Rust dependencies are listed with their versions in Cargo.lock and keep
+their own licenses. The DSP crates use wide, safe_arch and bytemuck for SIMD
+arithmetic, each licensed under Zlib OR Apache-2.0 OR MIT.
+
+Native libraries are provisioned separately and linked only when the matching
+build option is selected:
+
+  - UHD / libuhd (USRP backend)
+        License: GPL-3.0-or-later
+        By Ettus Research / National Instruments.
+  - libbladeRF (bladeRF backend)
+        License: LGPL-2.1-or-later
+        By Nuand LLC.
+  - SoapySDR (optional backend)
+        License: Boost Software License 1.0
+  - usrsctp (userspace SCTP transport)
+        License: BSD-3-Clause
+
+License compatibility:
+  - GPL-3.0-or-later (UHD) combines with AGPL-3.0-or-later under AGPLv3
+    section 13. A build that links UHD distributes under AGPL-3.0-or-later.
+  - LGPL-2.1-or-later (libbladeRF) permits use by a program under any license.
+    The LGPL terms continue to apply to libbladeRF itself.
+  - The Boost and BSD licenses are permissive.
+
+The combined umts-hnb binary distributes under AGPL-3.0-or-later. AGPL
+section 13 (network-use source offer) applies to anyone hosting umts-hnb as a
+service.
+
+Patents
+-------
+
+The use of this software to provide UMTS services may involve patented
+technologies. Users of this software are responsible for ensuring compliance
+with all applicable laws and patent licenses in their jurisdiction.

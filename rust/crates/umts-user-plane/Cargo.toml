@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "umts-user-plane"
+description = "Iu user plane, GTP-U and voice media handling."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+umts-types.workspace = true
+getrandom = "=0.4.3"
+
+[lints]
+workspace = true

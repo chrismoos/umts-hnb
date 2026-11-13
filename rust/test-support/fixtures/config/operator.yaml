@@ -1,0 +1,30 @@
+cell:
+  plmn: 001-01
+  lac: 63
+  rac: 45
+  sac: 36
+  cell_id: 37
+  hnb_identity: umts-hnb-001-01-000000000001
+  broadcast_state_file: .runtime/cell-broadcast.pb
+  physical:
+    downlink_scrambling_code: 0
+  advertised_power:
+    cpich_tx_dbm: 10
+    uplink_interference_dbm: -70
+core:
+  hnbgw:
+    address: 127.0.0.10
+    port: 29169
+    transport: sctp
+  gtpu:
+    bind_ip: 127.0.0.20
+radio:
+  backend: uhd
+  uhd_args: type=b200,master_clock_rate=30720000
+  uarfcn_dl: 4400
+  uarfcn_ul: 4175
+  tx_gain_db: 75.0
+  rx_gain_db: 30.0
+  rx_delay_samples: 95.0
+runtime:
+  maximum_ues: 2

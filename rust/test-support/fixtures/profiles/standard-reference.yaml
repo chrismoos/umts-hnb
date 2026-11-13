@@ -1,0 +1,514 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+cell:
+  packet_modes: [rel99, hspa, hspa-plus]
+  secondary_carrier:
+    enabled: false
+    uarfcn_dl: null
+    primary_scrambling_code: null
+    power_percent: 50.0
+  gprs_enable: true
+  nmo: 2
+  q_qual_min: -24
+  physical:
+    dch_secondary_scrambling_code: 0
+  access:
+    prach:
+      dynamic_persistence_level: 1
+      initial_power_constant_db: -30
+      scrambling_code_word_number: 0
+      signature: 13
+      subchannel: 1
+  common_channels:
+    aich_power_offset_db: -10
+  measurements:
+    request_cpich_measurements: true
+    ue_measurement_report_count: null
+    ue_measurement_interval_ms: 1000
+core:
+  hnbgw:
+    udp_encapsulation_port: null
+    udp_encapsulation_local_port: null
+  gtpu:
+    advertise_ip: null
+    allow_ephemeral_port: false
+    bind_port: 2152
+    release_rab_on_error_indication: true
+  iuh:
+    retry_attempts: 0
+    retry_backoff_secs: 5
+  hnbap_tmsi_registration: true
+rel99:
+  profile: standard
+  physical:
+    initial_ul_puncturing_limit_percent: 76
+    planner:
+      budgets:
+        maximum_combinations: 1024
+        maximum_mapping_entries: 1000000
+        maximum_total_coded_bits: 500000
+        maximum_transport_coded_bits: 500000
+        maximum_user_storage_bytes: 16000000
+      physical_candidates:
+      - default_offset_512_chips: 0
+        downlink_code_count: 1
+        downlink_pilot_bits: 8
+        downlink_sf: 256
+        downlink_tfci: true
+        dpcch_offset_db: -80
+        flexible_position: true
+        pc_preamble_frames: 0
+        pilot_offset_quarter_db: 0
+        srb_delay_frames: 0
+        tpc_algorithm: algorithm-2
+        tpc_step_db: 1
+        uplink_dpdch_count: 1
+        uplink_minimum_sf: 4
+        uplink_tfci: true
+      - default_offset_512_chips: 0
+        downlink_code_count: 1
+        downlink_pilot_bits: 8
+        downlink_sf: 128
+        downlink_tfci: true
+        dpcch_offset_db: -80
+        flexible_position: true
+        pc_preamble_frames: 0
+        pilot_offset_quarter_db: 0
+        srb_delay_frames: 0
+        tpc_algorithm: algorithm-2
+        tpc_step_db: 1
+        uplink_dpdch_count: 1
+        uplink_minimum_sf: 4
+        uplink_tfci: true
+      - default_offset_512_chips: 0
+        downlink_code_count: 1
+        downlink_pilot_bits: 16
+        downlink_sf: 8
+        downlink_tfci: true
+        dpcch_offset_db: -80
+        flexible_position: true
+        pc_preamble_frames: 0
+        pilot_offset_quarter_db: 0
+        srb_delay_frames: 0
+        tpc_algorithm: algorithm-2
+        tpc_step_db: 1
+        uplink_dpdch_count: 1
+        uplink_minimum_sf: 4
+        uplink_tfci: true
+      services:
+        circuit:
+        - contract:
+            delivery_order: true
+            maximum_transfer_delay_ms: 80
+            subflows:
+            - delivery: indicate
+              residual:
+                exponent: 6
+                mantissa: 1
+              sdu:
+                exponent: 5
+                mantissa: 1
+            - delivery: no-detection
+              residual:
+                exponent: 6
+                mantissa: 1
+              sdu: null
+            - delivery: no-detection
+              residual:
+                exponent: 6
+                mantissa: 1
+              sdu: null
+            traffic_class: conversational
+          formats:
+          - subflow_bits:
+            - 0
+            - 0
+            - 0
+          - subflow_bits:
+            - 39
+            - 0
+            - 0
+          - subflow_bits:
+            - 42
+            - 53
+            - 0
+          - subflow_bits:
+            - 55
+            - 63
+            - 0
+          - subflow_bits:
+            - 75
+            - 84
+            - 0
+          - subflow_bits:
+            - 81
+            - 103
+            - 60
+          interval_ms: 20
+          name: amr-narrowband-core-contract
+          subflows:
+          - downlink:
+              crc_bits: 12
+              kind: convolutional-third
+              rate_matching_attribute: 200
+            empty_block: true
+            uplink:
+              crc_bits: 12
+              kind: convolutional-third
+              rate_matching_attribute: 200
+          - downlink:
+              crc_bits: 0
+              kind: convolutional-third
+              rate_matching_attribute: 190
+            empty_block: false
+            uplink:
+              crc_bits: 0
+              kind: convolutional-third
+              rate_matching_attribute: 190
+          - downlink:
+              crc_bits: 0
+              kind: convolutional-half
+              rate_matching_attribute: 235
+            empty_block: false
+            uplink:
+              crc_bits: 0
+              kind: convolutional-half
+              rate_matching_attribute: 235
+          versions: 3
+        packet:
+        - am:
+            buffers:
+              maximum_buffer_bytes: 4000000
+              maximum_sdu_bytes: 2048
+              queued_sdus: 16
+            network:
+              last_retransmission: true
+              last_transmission: true
+              maximum_data_attempts: 10
+              maximum_reset_attempts: 4
+              missing_pdu_indicator: true
+              poll_every_pdus: 1
+              poll_prohibit_ms: null
+              poll_timeout_ms: 200
+              reset_timeout_ms: 400
+              status_prohibit_ms: 100
+            ue:
+              downlink_window: 2047
+              in_sequence_delivery: true
+              last_retransmission: true
+              last_transmission: true
+              maximum_data_attempts: 10
+              maximum_reset_attempts: 4
+              missing_pdu_indicator: true
+              poll_every_pdus: 1
+              poll_prohibit_ms: null
+              poll_timeout_ms: 200
+              reset_timeout_ms: 400
+              status_prohibit_ms: 20
+              uplink_window: 2047
+          contract:
+            delivery_order: true
+            maximum_transfer_delay_ms: null
+            subflows:
+            - delivery: discard
+              residual:
+                exponent: 6
+                mantissa: 1
+              sdu:
+                exponent: 4
+                mantissa: 1
+            traffic_class: background
+          downlink:
+            coding:
+              crc_bits: 16
+              kind: turbo
+              rate_matching_attribute: 200
+            interval_ms: 10
+            maximum_blocks: 3
+            payload_budget_bits: 256
+            rlc_bits: 2040
+          name: background-am-sdu-1e4
+          um: null
+          uplink:
+            coding:
+              crc_bits: 16
+              kind: turbo
+              rate_matching_attribute: 200
+            interval_ms: 10
+            maximum_blocks: 4
+            payload_budget_bits: 928
+            rlc_bits: 952
+      signalling:
+        downlink:
+          crc_bits: 16
+          kind: convolutional-third
+          rate_matching_attribute: 200
+        interval_ms: 40
+        maximum_blocks: 1
+        um_downlink_bits: 240
+        um_uplink_bits: 232
+        uplink:
+          crc_bits: 16
+          kind: convolutional-third
+          rate_matching_attribute: 200
+      uplink_control_gain: 3
+      uplink_data_gain: 15
+    uplink_scrambling_code_base: 12084932
+rrc:
+  cn_drx_cycle_length_coefficient: 6
+  combined_bearer_setup: true
+  inactivity_delete_seconds: 300
+  inactivity_release_seconds: 180
+  max_allowed_ul_tx_power_dbm: 33
+  periodic_lu_timer_value: 30
+  release_complete_retransmissions: 1
+  release_transport_policy: auto
+  srnc_id: 0
+  ura_identity: 100
+diagnostics:
+  logging:
+    filter: info
+management:
+  grpc:
+    administrator_certificates_sha256: []
+    administrator_socket_path: .runtime/admin.sock
+    capture_directory: .runtime/captures
+    enabled: true
+    maximum_capture_disk_mib: 2048
+    socket_path: .runtime/management.sock
+    tcp_address: null
+    tls_certificate: null
+    tls_client_ca: null
+    tls_key: null
+runtime:
+  scheduling:
+    enabled: true
+    main_cpu: null
+    control_cpu: null
+    usb_cpu: null
+    prepare_cpu: null
+    submit_cpu: null
+    receive_cpu: null
+    reader_cpu: null
+    usb_priority: 90
+    submit_priority: 85
+    reader_priority: 85
+    prepare_priority: 80
+    receive_priority: 75
+  dch_cpu: null
+  simd: auto
+  media:
+    circuit:
+      advertise_ip: null
+      bind_ip: null
+      datagram_bytes: 2048
+      horizon_ms: 60000
+      initialization: initiate
+      payload_type: 96
+      playout_lead_ms: 40
+      repetitions: 3
+      timeout_ms: 400
+      versions: 3
+      wait_ms: 40
+    maximum_packet_bytes: 134217728
+    maximum_voice_bytes: 268435456
+  clock:
+    interval_us: 1000000
+    maximum_age_us: null
+    maximum_drift_ppm: 100
+    maximum_query_us: 250
+  recovery:
+    backoff_ms: 100
+    maximum_backoff_ms: 1000
+    maximum_restarts: 0
+  # Submission polls near its deadline when enabled. Preparation uses blocking waits.
+  spin_wait: true
+  # Locks all process memory at startup so realtime workers never page-fault.
+  # Needs an unlimited memlock limit. Off here because the resident size then
+  # stays at its peak.
+  lock_memory: false
+  tx_batch_slots: 1
+  maximum_sdu_bytes: 8192
+  queued_sdus_per_bearer: 64
+  maximum_queue_bytes: 67108864
+  rx_timeout_us: 1000
+  rx_queue_blocks: 64
+  startup_lead_ms: 250
+  minimum_submission_us: 100
+  maximum_submission_us: 1425
+  maximum_preparation_us: 1525
+  idle_wait_us: 100
+  controller_idle_wait_us: 100
+  startup_timeout_ms: 5000
+  clock_stall_timeout_ms: 1000
+  join_timeout_ms: 3000
+radio:
+  tx_samples_per_chip: 2
+  tx_analog_bandwidth_hz: 5000000
+  tx_lo_offset_hz: 0
+  soapy_args: ''
+  tx_antenna: null
+  rx_antenna: null
+  uhd_rx_timestamp_offset: null
+  bladerf_args: ''
+  bladerf_rx_sample_phase: 0
+  bladerf_stream_buffers: 8
+  bladerf_stream_buffer_samples: 4096
+  bladerf_stream_transfers: 4
+  bladerf_rx_timestamp_offset: null
+receiver:
+  turbo_iterations: 4
+  filter_span_chips: 16
+  dedicated:
+    maximum_shared_bytes: 4194304
+    maximum_sample_bytes: 67108864
+    maximum_coded_bits: 8388608
+    maximum_output_bytes: 8388608
+    maximum_demultiplexed_bits: 8388608
+    maximum_bearer_bytes: 67108864
+    maximum_transmit_bits: 16777216
+    maximum_frame_bits: 262144
+    history_frames: 2
+    work_per_cycle: 16
+    command_capacity: 64
+    output_slots: 8
+    search_radius_samples: 8
+    minimum_coherent_fraction: 0.05
+    carrier_initial_hz: 0.0
+    carrier_maximum_absolute_hz: 2000.0
+    carrier_update_fraction: 0.05
+    carrier_minimum_coherence: 0.8
+    likelihood_maximum: 128.0
+    tfci_minimum_score: 0.5
+    tfci_minimum_margin: 0.1
+    radio_link_out_of_sync_frames: 50
+    radio_link_in_sync_frames: 10
+    radio_link_failure_frames: 300
+power_control:
+  uplink:
+    sir_ceiling_db: 13.0
+    initial_sir_db: 9.0
+    sir_floor_db: 6.0
+    target_bler: 0.02
+    tpc_hold_groups: 0
+  downlink:
+    pich_power_offset_db: -10
+    allocation:
+      aich_percent: 0.1732142
+      broadcast_percent: 1.6282558
+      broadcast_sync_percent: 2.0
+      carrier_rms: 0.2939069
+      cpich_percent: 5.477475
+      crest_reduction_enabled: true
+      dedicated_percent: 3.2239468
+      e_agch_percent: 0.16282548
+      e_hich_percent: 0.16282548
+      fach_percent: 0.26052105
+      hs_scch_percent: 0.32565132
+      hsdpa_percent: 87.777016
+      pch_percent: 0.26052105
+      peak_margin_db: 0.1
+      pich_percent: 0.54774755
+    cpich_amplitude: 0.1
+    common_channel_offset_db: 0.0
+    dedicated:
+      downlink_offset_db: 0.0
+      downlink_minimum_offset_db: -6.0
+      tpc_offset_db: 6.0
+      tpc_maximum_observation_age_chips: 10240
+      tpc_initial_maximum_slots: 9000
+hspa:
+  downlink:
+    dual_cell: false
+    qam64_enabled: true
+    fdpch: false
+    compact_common_channels: true
+    measurement_power_offset_db: null
+    harq_processes: 6
+    harq_memory_bits: []
+    rlc_pdu_bits: 4640
+    rlc_receive_window: 768
+    secondary_scrambling_code: 0
+    all_secondary_power_offset_db: 0.0
+    feedback:
+      ack_nack_power_index: 6
+      cqi_power_index: 5
+      cqi_interval_ms: 8
+    resources:
+      control_codes: 1
+      data_codes: 15
+      maximum_queue_bytes: 67108864
+      maximum_queue_bytes_per_ue: 1048576
+      maximum_tx_bytes: 33554432
+      pdus_per_queue: 256
+      pending_transmissions: 32
+      scheduling:
+        acknowledgement:
+          maximum_relative_disturbance: 1.0
+          minimum_correlation: 0.5
+          minimum_margin: 0.1
+          minimum_pilot_fraction: 0.5
+          minimum_relative_soft_power: 0.01
+        control_amplitude: 0.1
+        cqi:
+          maximum_relative_disturbance: 1.0
+          minimum_correlation: 0.5
+          minimum_margin: 0.1
+          minimum_pilot_fraction: 0.5
+          minimum_relative_soft_power: 0.01
+        cqi_offset_limit: 3
+        cqi_target_bler_percent: 10
+        maximum_buffer_bytes: 4000000
+        maximum_cell_bytes: 3221225472
+        maximum_coded_bits: 150000
+        maximum_cqi_age_chips: 76800
+        maximum_encoder_bytes: 16000000
+        maximum_formats: 65536
+        maximum_plan_bytes: 300000000
+        maximum_ue_bytes: 640000000
+        preparation_guard_us: 1000
+        selection_budget: 4096
+  uplink:
+    scheduled: true
+    rv_zero_only: false
+    four_code_uplink: true
+    max_category: 6
+    initial_serving_grant: 31
+    serving_grant: 31
+    edpcch_power_offset: 5
+    edpdch_references:
+    - etfci: 11
+      power_offset: 11
+    - etfci: 81
+      power_offset: 25
+    resources:
+      command_capacity: 16
+      grant_amplitude: 0.1
+      maximum_cell_receive_bytes: 4294967296
+      maximum_tx_bytes: 4194304
+      pending_transmissions: 16
+      primary_grant_refresh_ms: 1000
+      receive:
+        feedback_amplitude: 0.1
+        feedback_capacity: 4
+        iterations: 4
+        likelihood_limit: 64.0
+        maximum_catalog_bytes: 67108864
+        maximum_format_bits: 100000
+        maximum_receive_bytes: 134217728
+        minimum_control_correlation: 0.7
+        minimum_control_margin: 0.2
+        packet_bytes: 8388608
+        packet_capacity: 257
+        reorder_hold_ttis: 32
+        report_bytes: 1048576
+        report_capacity: 4
+        retained_sample_bytes: 4194304
+        scratch_bytes: 4194304
+        soft_buffer_bytes: 4194304
+      service_visits: 2
+security:
+  allow_uea0: true
+  allow_uea1: true
+  allow_uea2: true
+  allow_uia1: true
+  allow_uia2: true

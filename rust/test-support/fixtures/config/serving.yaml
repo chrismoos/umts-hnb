@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+cell:
+  packet_modes: [rel99, hspa, hspa-plus]
+  plmn: 001-01
+  lac: 63
+  rac: 45
+  sac: 36
+  cell_id: 36
+  hnb_identity: umts-hnb-001-01-000000000001
+core:
+  hnbgw:
+    address: 127.0.0.10
+    port: 29169
+  gtpu:
+    bind_ip: 127.0.0.20
+    bind_port: 2152
+radio:
+  backend: uhd
+  uhd_args: type=b200,master_clock_rate=30720000
+  bladerf_rx_sample_phase: 1
+  uarfcn_dl: 4400
+  uarfcn_ul: 4175
+  tx_gain_db: 75.0
+  rx_gain_db: 30.0
+  tx_lo_offset_hz: 0
+  bladerf_stream_buffers: 8
+  bladerf_stream_buffer_samples: 1024
+  bladerf_stream_transfers: 4
+runtime:
+  simd: auto
+  dch_cpu: 3
+hspa:
+  downlink:
+    fdpch: true
+    compact_common_channels: true
+    measurement_power_offset_db: 13.0
+    feedback:
+      ack_nack_power_index: 6
+    harq_processes: 6
+  uplink:
+    scheduled: true
+    four_code_uplink: true
+    max_category: 6
+    initial_serving_grant: 21
+    serving_grant: 29
+    edpcch_power_offset: 8
+    edpdch_references:
+    - etfci: 11
+      power_offset: 10
+    - etfci: 83
+      power_offset: 17
+    - etfci: 121
+      power_offset: 22
+    - etfci: 127
+      power_offset: 24
+receiver:
+  turbo_iterations: 4
+power_control:
+  uplink:
+    sir_ceiling_db: 14.0
+    initial_sir_db: 7.0
+    sir_floor_db: 6.0
+    target_bler: 0.01
+    tpc_hold_groups: 2

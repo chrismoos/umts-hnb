@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "umts-dsp"
+description = "UMTS FDD physical-layer signal processing: spreading, channel coding, HSDPA and HSUPA."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+num-complex.workspace = true
+rustfft.workspace = true
+sdr-hal = { workspace = true, features = ["dsp"] }
+umts-types.workspace = true
+wide = "=1.7.1"
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "receive_filter"
+harness = false
+
+[[bench]]
+name = "prach_search"
+harness = false
+
+[[bench]]
+name = "fractional_sampling"
+harness = false
+
+[[bench]]
+name = "transport_encoding"
+harness = false
+
+[[bench]]
+name = "turbo_decode"
+harness = false
+
+[[bench]]
+name = "control_decode"
+harness = false
+
+[[bench]]
+name = "carrier_correction"
+harness = false
+
+[[bench]]
+name = "pulse_shaping"
+harness = false
+

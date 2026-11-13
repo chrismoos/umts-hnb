@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "umts-hnb"
+description = "A Rust UMTS Home NodeB with Rel99, HSDPA, HSUPA and Iuh core connectivity."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+uhd = ["sdr-hal/uhd-backend"]
+bladerf = ["sdr-hal/bladerf-backend"]
+soapy = ["sdr-hal/soapy-backend"]
+usrsctp = ["umts-sctp/usrsctp"]
+
+[dependencies]
+umts-dsp = { path = "../umts-dsp" }
+umts-rrc = { path = "../umts-rrc" }
+umts-rrc-codec = { path = "../umts-rrc-codec" }
+umts-rrc-schema = { path = "../umts-rrc-schema" }
+umts-types.workspace = true
+umts-radio = { path = "../umts-radio" }
+umts-runtime = { path = "../umts-runtime" }
+umts-core = { path = "../umts-core" }
+umts-user-plane = { path = "../umts-user-plane" }
+umts-iuh = { path = "../umts-iuh" }
+umts-mac = { path = "../umts-mac" }
+umts-rlc = { path = "../umts-rlc" }
+umts-security = { path = "../umts-security" }
+umts-management = { path = "../umts-management" }
+prost = "=0.14.3"
+sha2 = "0.10"
+arc-swap = "1"
+uuid = { version = "1", features = ["v4"] }
+tonic = { version = "=0.14.6", default-features = false }
+sdr-hal = { workspace = true, features = ["config"] }
+umts-sctp = { path = "../umts-sctp" }
+signal-hook = "=0.4.5"
+num-complex.workspace = true
+umts-config.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+clap.workspace = true
+rasn = "=0.30.0"
+getrandom = "=0.4.3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "=1.1.4", features = ["time", "fs", "process"] }
+
+[build-dependencies]
+prost-build = "=0.14.3"
+
+[dev-dependencies]
+tempfile = "3"
+sdr-hal = { workspace = true, features = ["memory"] }
+serde.workspace = true
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "common_runtime"
+harness = false

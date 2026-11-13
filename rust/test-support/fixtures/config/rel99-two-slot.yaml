@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+cell:
+  plmn: 001-01
+  lac: 63
+  rac: 45
+  sac: 36
+  cell_id: 36
+  hnb_identity: umts-hnb-001-01-000000000001
+  advertised_power:
+    cpich_tx_dbm: 10
+    uplink_interference_dbm: -70
+core:
+  hnbgw:
+    address: 127.0.0.10
+    port: 29169
+    transport: sctp
+  gtpu:
+    bind_ip: 127.0.0.20
+radio:
+  backend: uhd
+  uhd_args: type=b200,master_clock_rate=30720000
+  bladerf_rx_sample_phase: 0
+  uarfcn_dl: 4400
+  uarfcn_ul: 4175
+  tx_gain_db: 75.0
+  rx_gain_db: 30.0
+hspa:
+  downlink:
+    enabled: false
+  uplink:
+    enabled: false
+runtime:
+  tx_batch_slots: 2
+  spin_wait: true
+  clock:
+    interval_us: 1000000
+    maximum_age_us: null
+  minimum_submission_us: 100
+  maximum_preparation_us: 2434
+  maximum_submission_us: 2334
+  recovery:
+    maximum_restarts: 0
+    backoff_ms: 100
+    maximum_backoff_ms: 1000

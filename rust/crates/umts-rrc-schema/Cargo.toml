@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "umts-rrc-schema"
+description = "Rust types generated from the TS 25.331 RRC ASN.1 modules."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+test = false
+# ASN.1 prose contains indented headings that rustdoc interprets as Rust examples.
+doctest = false
+
+[dependencies]
+rasn = "=0.30.0"
+
+[build-dependencies]
+rasn-compiler = { git = "https://github.com/chrismoos/rasn-compiler", rev = "ffa7d32f2f9f1552431dd9182cee9323357680c5" }
+
+[lints]
+workspace = true

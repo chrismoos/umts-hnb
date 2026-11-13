@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "umts-iuh"
+description = "Iuh protocol stack: HNBAP, RUA and RANAP encoding and session handling."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+rasn = "=0.30.0"
+umts-types.workspace = true
+tracing.workspace = true
+zeroize = "=1.8.2"
+
+[lints]
+workspace = true
+
+[[test]]
+name = "aper_length_regression"
+path = "tests/aper_length_regression.rs"

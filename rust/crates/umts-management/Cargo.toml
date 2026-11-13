@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "umts-management"
+description = "gRPC management API, server and umts-hnbctl client for the Home NodeB."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+tracing.workspace = true
+libc = "0.2"
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tonic = { version = "=0.14.6", features = ["transport", "tls-ring"] }
+tonic-prost = "=0.14.6"
+tonic-health = "=0.14.6"
+prost = "=0.14.3"
+prost-reflect = { version = "=0.16.5", features = ["serde"] }
+tokio = { version = "1", features = ["rt", "net", "sync", "time", "macros", "signal", "fs"] }
+tokio-stream = { version = "0.1", features = ["net", "sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+async-stream = "0.3"
+arc-swap = "1"
+hyper-util = { version = "0.1", features = ["tokio"] }
+tower = { version = "0.5", features = ["util"] }
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+umts-runtime = { path = "../umts-runtime" }
+pin-project-lite = "0.2"
+
+[build-dependencies]
+tonic-prost-build = "=0.14.6"
+
+[dev-dependencies]
+tempfile = "3"
+rcgen = { version = "=0.14.10", default-features = false, features = ["crypto", "ring", "pem"] }
+
+[[bin]]
+name = "umts-hnbctl"
+path = "src/bin/umts-hnbctl.rs"
+
+[lints]
+workspace = true

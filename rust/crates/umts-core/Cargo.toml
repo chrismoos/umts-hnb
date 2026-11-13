@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "umts-core"
+description = "Core-network signaling gateway between the Home NodeB runtime and the Iuh session."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+umts-iuh = { path = "../umts-iuh" }
+umts-sctp = { path = "../umts-sctp" }
+umts-types.workspace = true
+zeroize = "=1.8.2"
+
+[lints]
+workspace = true

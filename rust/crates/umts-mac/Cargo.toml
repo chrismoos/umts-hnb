@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "umts-mac"
+description = "UMTS MAC entities for HSDPA and HSUPA transport."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+umts-types.workspace = true
+
+[lints]
+workspace = true

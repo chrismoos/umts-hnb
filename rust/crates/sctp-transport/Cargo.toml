@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "sctp-transport"
+description = "SCTP transport over kernel SCTP or userspace usrsctp, with optional UDP encapsulation."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+usrsctp = ["dep:bindgen", "dep:pkg-config"]
+
+[dependencies]
+libc = "0.2"
+socket2 = "0.6"
+zeroize = "=1.8.2"
+
+[build-dependencies]
+bindgen = { version = "0.72.1", optional = true }
+pkg-config = { version = "0.3", optional = true }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "deny"

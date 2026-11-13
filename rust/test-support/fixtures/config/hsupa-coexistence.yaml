@@ -1,0 +1,252 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+cell:
+  plmn: 001-01
+  lac: 63
+  rac: 45
+  sac: 36
+  cell_id: 37
+  hnb_identity: umts-hnb-001-01-000000000001
+  physical:
+    downlink_scrambling_code: 0
+  broadcast_state_file: .runtime/cell-broadcast.pb
+  advertised_power:
+    cpich_tx_dbm: 10
+    uplink_interference_dbm: -70
+core:
+  hnbgw:
+    address: 127.0.0.10
+    port: 29169
+    transport: sctp
+  gtpu:
+    bind_ip: 127.0.0.20
+radio:
+  backend: uhd
+  uhd_args: type=b200,master_clock_rate=30720000
+  bladerf_rx_sample_phase: 0
+  uarfcn_dl: 4400
+  uarfcn_ul: 4175
+  tx_gain_db: 75.0
+  rx_gain_db: 30.0
+  rx_delay_samples: 95.0
+hspa:
+  downlink:
+    enabled: true
+    resources:
+      data_codes: 12
+      control_codes: 1
+      scheduling:
+        maximum_formats: 65536
+        maximum_coded_bits: 100000
+        maximum_plan_bytes: 224000000
+        maximum_buffer_bytes: 4000000
+        maximum_encoder_bytes: 16000000
+        maximum_ue_bytes: 256000000
+        maximum_cell_bytes: 512000000
+        maximum_cqi_age_chips: 76800
+        preparation_guard_us: 2000
+        selection_budget: 4096
+        control_amplitude: 0.1
+        acknowledgement:
+          minimum_correlation: 0.5
+          minimum_margin: 0.1
+          minimum_pilot_fraction: 0.5
+          maximum_relative_disturbance: 1.0
+          minimum_relative_soft_power: 0.01
+        cqi:
+          minimum_correlation: 0.5
+          minimum_margin: 0.1
+          minimum_pilot_fraction: 0.5
+          maximum_relative_disturbance: 1.0
+          minimum_relative_soft_power: 0.01
+  uplink:
+    enabled: true
+    scheduled: true
+    max_category: 6
+    four_code_uplink: false
+    resources:
+      maximum_cell_receive_bytes: 2147483648
+      pending_transmissions: 16
+      maximum_tx_bytes: 4194304
+      command_capacity: 16
+      service_visits: 2
+      grant_amplitude: 0.1
+      receive:
+        likelihood_limit: 64.0
+        minimum_control_correlation: 0.5
+        minimum_control_margin: 0.05
+        iterations: 4
+        maximum_format_bits: 100000
+        maximum_catalog_bytes: 67108864
+        retained_sample_bytes: 4194304
+        soft_buffer_bytes: 4194304
+        scratch_bytes: 4194304
+        maximum_receive_bytes: 134217728
+        report_capacity: 4
+        report_bytes: 1048576
+        packet_capacity: 33
+        packet_bytes: 1048576
+        reorder_hold_ttis: 32
+        feedback_capacity: 4
+        feedback_amplitude: 0.1
+rel99:
+  physical:
+    initial_ul_puncturing_limit_percent: 76
+    planner:
+      physical_candidates:
+      - tpc_algorithm: algorithm-2
+      services:
+        circuit:
+        - name: amr-narrowband-core-contract
+          contract:
+            traffic_class: conversational
+            delivery_order: true
+            maximum_transfer_delay_ms: 80
+            subflows:
+            - residual:
+                mantissa: 1
+                exponent: 6
+              sdu:
+                mantissa: 1
+                exponent: 5
+              delivery: indicate
+            - residual:
+                mantissa: 1
+                exponent: 6
+              sdu: null
+              delivery: no-detection
+            - residual:
+                mantissa: 1
+                exponent: 6
+              sdu: null
+              delivery: no-detection
+          interval_ms: 20
+          subflows:
+          - uplink:
+              kind: convolutional-third
+              crc_bits: 12
+              rate_matching_attribute: 200
+            downlink:
+              kind: convolutional-third
+              crc_bits: 12
+              rate_matching_attribute: 200
+            empty_block: true
+          - uplink:
+              kind: convolutional-third
+              crc_bits: 0
+              rate_matching_attribute: 190
+            downlink:
+              kind: convolutional-third
+              crc_bits: 0
+              rate_matching_attribute: 190
+            empty_block: false
+          - uplink:
+              kind: convolutional-half
+              crc_bits: 0
+              rate_matching_attribute: 235
+            downlink:
+              kind: convolutional-half
+              crc_bits: 0
+              rate_matching_attribute: 235
+            empty_block: false
+          formats:
+          - subflow_bits:
+            - 0
+            - 0
+            - 0
+          - subflow_bits:
+            - 39
+            - 0
+            - 0
+          - subflow_bits:
+            - 42
+            - 53
+            - 0
+          - subflow_bits:
+            - 55
+            - 63
+            - 0
+          - subflow_bits:
+            - 75
+            - 84
+            - 0
+          - subflow_bits:
+            - 81
+            - 103
+            - 60
+          versions: 3
+        packet:
+        - name: background-am-sdu-1e4
+          contract:
+            traffic_class: background
+            delivery_order: true
+            maximum_transfer_delay_ms: null
+            subflows:
+            - residual:
+                mantissa: 1
+                exponent: 6
+              sdu:
+                mantissa: 1
+                exponent: 4
+              delivery: discard
+          uplink:
+            interval_ms: 10
+            rlc_bits: 320
+            payload_budget_bits: 256
+            maximum_blocks: 12
+            coding:
+              kind: turbo
+              crc_bits: 16
+              rate_matching_attribute: 200
+          downlink:
+            interval_ms: 10
+            rlc_bits: 320
+            payload_budget_bits: 256
+            maximum_blocks: 12
+            coding:
+              kind: turbo
+              crc_bits: 16
+              rate_matching_attribute: 200
+          am:
+            ue:
+              uplink_window: 512
+              downlink_window: 2047
+              maximum_data_attempts: 10
+              maximum_reset_attempts: 4
+              reset_timeout_ms: 400
+              poll_timeout_ms: 200
+              poll_prohibit_ms: null
+              poll_every_pdus: 1
+              last_transmission: true
+              last_retransmission: true
+              status_prohibit_ms: 20
+              missing_pdu_indicator: true
+              in_sequence_delivery: true
+            network:
+              maximum_data_attempts: 10
+              maximum_reset_attempts: 4
+              reset_timeout_ms: 400
+              poll_timeout_ms: 200
+              poll_prohibit_ms: null
+              poll_every_pdus: 1
+              last_transmission: true
+              last_retransmission: true
+              status_prohibit_ms: 100
+              missing_pdu_indicator: true
+            buffers:
+              maximum_sdu_bytes: 65535
+              queued_sdus: 16
+              maximum_buffer_bytes: 4000000
+runtime:
+  tx_batch_slots: 2
+  spin_wait: true
+  clock:
+    interval_us: 1000000
+    maximum_age_us: null
+    maximum_query_us: 250
+  minimum_submission_us: 100
+  maximum_preparation_us: 2434
+  maximum_submission_us: 2334
+  recovery:
+    maximum_restarts: 0
+    backoff_ms: 100
+    maximum_backoff_ms: 1000

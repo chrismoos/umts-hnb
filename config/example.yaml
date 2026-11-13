@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+cell:
+  # Selects packet features. Add dc-hspa with cell.secondary_carrier.uarfcn_dl.
+  packet_modes: [rel99, hspa, hspa-plus]
+  # Network and area identities must agree with the core configuration.
+  plmn: 001-01
+  lac: 63
+  rac: 45
+  sac: 36
+  cell_id: 37
+  hnb_identity: umts-hnb-001-01-000000000001
+  # Persistent protobuf broadcast state. Relative paths use the launch working directory.
+  broadcast_state_file: .runtime/cell-broadcast.pb
+  physical:
+    downlink_scrambling_code: 0
+  # Power values signaled to UEs, separate from SDR gain settings.
+  advertised_power:
+    cpich_tx_dbm: 10
+    uplink_interference_dbm: -70
+core:
+  hnbgw:
+    address: 127.0.0.1
+    port: 29169
+    transport: sctp
+  gtpu:
+    # Local user-plane address. A core on the same machine already uses
+    # 127.0.0.1:2152 for the SGSN. For a remote core, use a reachable address
+    # or set advertise_ip to the reachable address mapped to this endpoint.
+    bind_ip: 127.0.0.20
+radio:
+  backend: uhd
+  uhd_args: type=b200,master_clock_rate=30720000
+  tx_antenna: TX/RX
+  rx_antenna: RX2
+  # UMTS channel numbers, not MHz. DL and UL must form a valid band pair.
+  uarfcn_dl: 4400
+  uarfcn_ul: 4175
+  # Gains used with a B200/B210, not an RF calibration.
+  tx_gain_db: 78.0
+  rx_gain_db: 30.0
+  # Receive path delay of the radio in RX samples, not software processing lead.
+  # Measured on a B200/B210: 95.0 for single-carrier modes, 78.0 with dc-hspa.
+  # Recheck for any other radio or sample geometry.
+  rx_delay_samples: 95.0
+runtime:
+  maximum_ues: 16

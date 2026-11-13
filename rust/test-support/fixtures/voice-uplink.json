@@ -1,0 +1,65 @@
+{
+  "ctfc": [
+    0,
+    2,
+    22,
+    1,
+    3,
+    23
+  ],
+  "transports": [
+    {
+      "id": 1,
+      "tti_ms": 40,
+      "attribute": 200,
+      "block_bits": 236,
+      "block_counts": [
+        0,
+        1
+      ],
+      "coding": "convolutional_third",
+      "crc_bits": 16
+    },
+    {
+      "id": 2,
+      "tti_ms": 20,
+      "attribute": 200,
+      "block_bits": [
+        0,
+        39,
+        81
+      ],
+      "block_counts": [
+        1,
+        1,
+        1
+      ],
+      "coding": "convolutional_third",
+      "crc_bits": 12
+    },
+    {
+      "id": 3,
+      "tti_ms": 20,
+      "attribute": 190,
+      "block_bits": 103,
+      "block_counts": [
+        0,
+        1
+      ],
+      "coding": "convolutional_third",
+      "crc_bits": 0
+    },
+    {
+      "id": 4,
+      "tti_ms": 20,
+      "attribute": 235,
+      "block_bits": 60,
+      "block_counts": [
+        0,
+        1
+      ],
+      "coding": "convolutional_half",
+      "crc_bits": 0
+    }
+  ]
+}

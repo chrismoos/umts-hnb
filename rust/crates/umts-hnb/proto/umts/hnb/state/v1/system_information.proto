@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+syntax = "proto3";
+
+package umts.hnb.state.v1;
+
+// Persistent revision state for one cell's broadcast system information.
+message SystemInformationState {
+  uint32 format_version = 1;
+  BroadcastValueTags tags = 2;
+  // Complete BCH schedule encoded with deterministic reference value tags.
+  bytes broadcast_transcript = 3;
+}
+
+message BroadcastValueTags {
+  uint32 mib = 1;
+  uint32 sib1 = 2;
+  uint32 sib3 = 3;
+  uint32 sib5 = 4;
+}

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "umts-rrc-codec"
+description = "UPER encoding and decoding of UMTS RRC messages."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+rasn = "=0.30.0"
+umts-rrc-schema = { path = "../umts-rrc-schema" }
+
+[lints]
+workspace = true
