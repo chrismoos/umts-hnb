@@ -1,0 +1,11 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -e
+
+if [ "$1" = purge ]; then
+    rm -rf /var/lib/umts-hnb
+fi
+
+#DEBHELPER#
+
+exit 0

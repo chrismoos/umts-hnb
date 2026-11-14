@@ -152,16 +152,10 @@ async fn main() -> Result<()> {
         umts_runtime::logging::Logging::initialize("info").map_err(anyhow::Error::from_boxed)?;
     let timeout = Duration::from_millis(args.timeout_ms);
     let connection = Connection {
-        endpoint: args.endpoint.clone().unwrap_or_else(|| {
-            format!(
-                "unix://{}",
-                if args.command.mutation() {
-                    client::ADMIN_SOCKET
-                } else {
-                    client::READ_SOCKET
-                }
-            )
-        }),
+        endpoint: args
+            .endpoint
+            .clone()
+            .unwrap_or_else(|| client::default_endpoint(args.command.mutation())),
         timeout,
         ca: args.tls_ca.clone(),
         certificate: args.tls_cert.clone(),

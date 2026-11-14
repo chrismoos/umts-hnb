@@ -3,11 +3,52 @@
 use crate::proto::hnb_management_client::HnbManagementClient;
 use anyhow::{Context, Result, ensure};
 use hyper_util::rt::TokioIo;
-use std::{path::PathBuf, time::Duration};
+use std::{
+    io::ErrorKind,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
 
-pub const READ_SOCKET: &str = ".runtime/management.sock";
-pub const ADMIN_SOCKET: &str = ".runtime/admin.sock";
+const LOCAL_RUNTIME_DIRECTORY: &str = ".runtime";
+/// Must match the working directory in `packaging/debian/umts-hnb.service`.
+const PACKAGED_RUNTIME_DIRECTORY: &str = "/var/lib/umts-hnb/.runtime";
+const READ_SOCKET: &str = "management.sock";
+const ADMIN_SOCKET: &str = "admin.sock";
+
+/// Returns the Unix socket endpoint used when no endpoint is given.
+///
+/// A socket under `.runtime/` in the working directory takes precedence. Otherwise the packaged
+/// service's socket is used when it exists or cannot be inspected, so a permission error names
+/// the packaged path.
+pub fn default_endpoint(administrator: bool) -> String {
+    let name = if administrator {
+        ADMIN_SOCKET
+    } else {
+        READ_SOCKET
+    };
+    let path = select_socket(
+        Path::new(LOCAL_RUNTIME_DIRECTORY).join(name),
+        Path::new(PACKAGED_RUNTIME_DIRECTORY).join(name),
+        present,
+    );
+    format!("unix://{}", path.display())
+}
+
+fn present(path: &Path) -> bool {
+    !matches!(
+        std::fs::symlink_metadata(path),
+        Err(error) if error.kind() == ErrorKind::NotFound
+    )
+}
+
+fn select_socket(local: PathBuf, packaged: PathBuf, present: impl Fn(&Path) -> bool) -> PathBuf {
+    if !present(&local) && present(&packaged) {
+        packaged
+    } else {
+        local
+    }
+}
 
 pub struct Connection {
     pub endpoint: String,
@@ -89,4 +130,47 @@ pub fn request<T>(message: T, timeout: Duration) -> tonic::Request<T> {
     let mut request = tonic::Request::new(message);
     request.set_timeout(timeout);
     request
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn select(local_present: bool, packaged_present: bool) -> PathBuf {
+        let local = PathBuf::from(".runtime/management.sock");
+        let packaged = PathBuf::from("/var/lib/umts-hnb/.runtime/management.sock");
+        select_socket(local.clone(), packaged.clone(), |path| {
+            if path == local {
+                local_present
+            } else {
+                packaged_present
+            }
+        })
+    }
+
+    #[test]
+    fn working_directory_socket_takes_precedence() {
+        assert_eq!(select(true, true), Path::new(".runtime/management.sock"));
+        assert_eq!(select(true, false), Path::new(".runtime/management.sock"));
+    }
+
+    #[test]
+    fn packaged_socket_is_used_without_a_local_socket() {
+        assert_eq!(
+            select(false, true),
+            Path::new("/var/lib/umts-hnb/.runtime/management.sock")
+        );
+    }
+
+    #[test]
+    fn missing_sockets_report_the_working_directory_path() {
+        assert_eq!(select(false, false), Path::new(".runtime/management.sock"));
+    }
+
+    #[test]
+    fn default_endpoints_name_the_socket_for_each_role() {
+        assert!(default_endpoint(false).ends_with("/management.sock"));
+        assert!(default_endpoint(true).ends_with("/admin.sock"));
+        assert!(default_endpoint(false).starts_with("unix://"));
+    }
 }

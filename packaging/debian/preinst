@@ -1,0 +1,30 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -e
+
+# The amd64 build targets x86-64-v3. Without these flags the binaries stop with SIGILL.
+required_x86_flags="avx avx2 bmi1 bmi2 f16c fma abm movbe xsave"
+
+case "$1" in
+install|upgrade)
+    if [ "$(dpkg --print-architecture)" = amd64 ] && [ -r /proc/cpuinfo ]; then
+        flags=" $(grep -m1 '^flags' /proc/cpuinfo | cut -d: -f2) "
+        missing=
+        for flag in $required_x86_flags; do
+            case "$flags" in
+            *" $flag "*) ;;
+            *) missing="$missing $flag" ;;
+            esac
+        done
+        if [ -n "$missing" ]; then
+            echo "umts-hnb requires an x86-64-v3 CPU (Intel Haswell, AMD Zen or later)." >&2
+            echo "This CPU is missing:$missing" >&2
+            exit 1
+        fi
+    fi
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,21 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -e
+
+if [ "$1" = configure ]; then
+    systemd-sysusers ${DPKG_ROOT:+--root="$DPKG_ROOT"} umts-hnb.conf
+    modprobe sctp 2>/dev/null || true
+    if [ -z "$2" ]; then
+        cat <<'EOF'
+umts-hnb is installed but not started.
+  1. Download the radio firmware:  sudo uhd_images_downloader -t b2xx
+  2. Edit the cell configuration:  sudoedit /etc/umts-hnb/site.yaml
+  3. Start the cell:               sudo systemctl enable --now umts-hnb
+Members of the umts-hnb group can run umts-hnbctl status without sudo.
+EOF
+    fi
+fi
+
+#DEBHELPER#
+
+exit 0

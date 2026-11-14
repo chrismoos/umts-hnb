@@ -1,0 +1,155 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package for ${{ matrix.suite }} ${{ matrix.arch }}
+    # Build provenance and releases are GitHub features. Forgejo skips this workflow.
+    if: github.server_url == 'https://github.com'
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.image }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: noble
+            image: ubuntu:24.04
+            arch: amd64
+            runner: ubuntu-24.04
+            rustflags: -C target-cpu=x86-64-v3
+          - suite: resolute
+            image: ubuntu:26.04
+            arch: amd64
+            runner: ubuntu-24.04
+            rustflags: -C target-cpu=x86-64-v3
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: '2'
+      # Overrides target-cpu=native from .cargo/config.toml. The preinst script checks the same level.
+      RUSTFLAGS: ${{ matrix.rustflags }}
+      CARGO_DEB_VERSION: 3.8.0
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+            build-essential ca-certificates curl dpkg-dev git pkg-config libclang-dev \
+            libuhd-dev libboost-system-dev libsctp-dev protobuf-compiler
+
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust with rustup
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+            sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" toolchain install
+
+      - name: Select package version
+        run: |
+          pkgid=$(cargo pkgid --locked -p umts-hnb)
+          crate_version=${pkgid##*[#@]}
+          case "$GITHUB_REF" in
+          refs/tags/v*)
+            if [ "${GITHUB_REF_NAME#v}" != "$crate_version" ]; then
+              echo "Tag $GITHUB_REF_NAME does not match workspace version $crate_version" >&2
+              exit 1
+            fi
+            ;;
+          esac
+          echo "DEB_VERSION=$(echo "$crate_version" | tr - '~')-1~${{ matrix.suite }}" >> "$GITHUB_ENV"
+
+      - name: Build binaries
+        run: cargo build --locked --release -p umts-hnb -p umts-management --features umts-hnb/uhd
+
+      - name: Build package
+        run: |
+          cargo install --locked cargo-deb --version "$CARGO_DEB_VERSION"
+          mkdir -p dist
+          cargo deb --locked --no-build -p umts-hnb --deb-version "$DEB_VERSION" --output dist/
+          dpkg-deb --info dist/*.deb
+          dpkg-deb --contents dist/*.deb
+
+      - name: Upload package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: umts-hnb-${{ matrix.suite }}-${{ matrix.arch }}
+          path: dist/*.deb
+          if-no-files-found: error
+
+  install:
+    name: Install on ${{ matrix.suite }} ${{ matrix.arch }}
+    needs: package
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.image }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {suite: noble, image: 'ubuntu:24.04', arch: amd64, runner: ubuntu-24.04}
+          - {suite: resolute, image: 'ubuntu:26.04', arch: amd64, runner: ubuntu-24.04}
+    steps:
+      - name: Download package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: umts-hnb-${{ matrix.suite }}-${{ matrix.arch }}
+          path: dist
+
+      - name: Install, upgrade in place and purge
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install --yes ./dist/*.deb
+          umts-hnb --version
+          umts-hnbctl --version
+          getent passwd umts-hnb
+          test -f /etc/umts-hnb/site.yaml
+          test -f /usr/share/umts-hnb/defaults.yaml
+          echo '# local edit' >> /etc/umts-hnb/site.yaml
+          DEBIAN_FRONTEND=noninteractive apt-get install --yes --reinstall ./dist/*.deb
+          grep -q '# local edit' /etc/umts-hnb/site.yaml
+          DEBIAN_FRONTEND=noninteractive apt-get purge --yes umts-hnb
+          test ! -e /etc/umts-hnb/site.yaml
+
+  release:
+    name: Draft GitHub release
+    needs: install
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: umts-hnb-*
+          path: dist
+          merge-multiple: true
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.deb
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "umts-hnb ${GITHUB_REF_NAME#v}" --notes "" dist/*.deb
