@@ -56,34 +56,6 @@ UDP to the core. The core must accept SCTP over UDP, as described in
 
 For a bladeRF or SoapySDR radio, replace `uhd` with `bladerf` or `soapy`.
 
-### Debian package
-
-The package installs both binaries, the stock configuration as
-`/etc/umts-hnb/site.yaml` and a `umts-hnb` systemd service. Built for
-x86-64-v3, the package installs only on CPUs with AVX2 and FMA (Intel Haswell,
-AMD Zen or later).
-
-```sh
-cargo install --locked cargo-deb
-RUSTFLAGS="-C target-cpu=x86-64-v3" cargo build --release \
-  -p umts-hnb -p umts-management --features umts-hnb/uhd
-cargo deb --no-build -p umts-hnb
-sudo apt-get install ./target/debian/umts-hnb_*.deb
-```
-
-The service is not enabled on install. It runs as the `umts-hnb` user with
-real-time scheduling and keeps runtime state in `/var/lib/umts-hnb`:
-
-```sh
-sudoedit /etc/umts-hnb/site.yaml
-sudo systemctl enable --now umts-hnb
-journalctl -u umts-hnb -f
-```
-
-`umts-hnbctl` uses the service's sockets when the working directory has no
-`.runtime/` sockets. Members of the `umts-hnb` group can run read-only
-commands without sudo.
-
 ## Configure
 
 Copy the example configuration:

@@ -12,7 +12,6 @@ permissions:
 jobs:
   package:
     name: Package for ${{ matrix.suite }} ${{ matrix.arch }}
-    # Build provenance and releases are GitHub features. Forgejo skips this workflow.
     if: github.server_url == 'https://github.com'
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.image }}
