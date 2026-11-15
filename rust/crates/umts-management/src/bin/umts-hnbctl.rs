@@ -19,7 +19,11 @@ const OPERATION_WAIT_SECONDS: u64 = 45;
 const STREAM_TIMEOUT_SECONDS: u64 = 3_600;
 
 #[derive(Parser)]
-#[command(version, about = "Manage the Rust UMTS HNB over gRPC")]
+#[command(
+    name = "umts-hnbctl",
+    version,
+    about = "Manage the Rust UMTS HNB over gRPC"
+)]
 struct Args {
     #[arg(long, global = true)]
     endpoint: Option<String>,
@@ -152,16 +156,10 @@ async fn main() -> Result<()> {
         umts_runtime::logging::Logging::initialize("info").map_err(anyhow::Error::from_boxed)?;
     let timeout = Duration::from_millis(args.timeout_ms);
     let connection = Connection {
-        endpoint: args.endpoint.clone().unwrap_or_else(|| {
-            format!(
-                "unix://{}",
-                if args.command.mutation() {
-                    client::ADMIN_SOCKET
-                } else {
-                    client::READ_SOCKET
-                }
-            )
-        }),
+        endpoint: args
+            .endpoint
+            .clone()
+            .unwrap_or_else(|| client::default_endpoint(args.command.mutation())),
         timeout,
         ca: args.tls_ca.clone(),
         certificate: args.tls_cert.clone(),

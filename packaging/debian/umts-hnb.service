@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[Unit]
+Description=UMTS Home NodeB
+Documentation=file:///usr/share/doc/umts-hnb/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=umts-hnb
+Group=umts-hnb
+WorkingDirectory=/var/lib/umts-hnb
+StateDirectory=umts-hnb
+StateDirectoryMode=0750
+Environment=HOME=/var/lib/umts-hnb
+ExecStart=/usr/bin/umts-hnb --defaults /usr/share/umts-hnb/defaults.yaml --config /etc/umts-hnb/site.yaml --serve
+# Radio threads use SCHED_FIFO up to runtime.scheduling priorities, and memory is locked.
+LimitRTPRIO=99
+LimitMEMLOCK=infinity
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
