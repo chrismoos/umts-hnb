@@ -3,7 +3,6 @@
 set -e
 
 if [ "$1" = configure ]; then
-    systemd-sysusers ${DPKG_ROOT:+--root="$DPKG_ROOT"} umts-hnb.conf
     modprobe sctp 2>/dev/null || true
     if [ -z "$2" ]; then
         cat <<'EOF'

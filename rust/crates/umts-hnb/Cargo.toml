@@ -70,6 +70,8 @@ harness = false
 
 [package.metadata.deb]
 maintainer = "Chris Moos <chris@chrismoos.com>"
+# The release profile keeps line tables. They go to a umts-hnb-dbgsym .ddeb.
+dbgsym = true
 section = "net"
 priority = "optional"
 extended-description = """\
@@ -87,7 +89,6 @@ assets = [
     ["../../../config/defaults.yaml", "usr/share/umts-hnb/", "644"],
     ["../../../config/example.yaml", "usr/share/umts-hnb/", "644"],
     ["../../../config/example.yaml", "etc/umts-hnb/site.yaml", "644"],
-    ["../../../packaging/debian/umts-hnb.sysusers", "usr/lib/sysusers.d/umts-hnb.conf", "644"],
     ["../../../packaging/debian/umts-hnb.modules-load", "usr/lib/modules-load.d/umts-hnb.conf", "644"],
     ["../../../README.md", "usr/share/doc/umts-hnb/", "644"],
     ["../../../docs/core-setup.md", "usr/share/doc/umts-hnb/", "644"],

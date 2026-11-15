@@ -19,7 +19,11 @@ const OPERATION_WAIT_SECONDS: u64 = 45;
 const STREAM_TIMEOUT_SECONDS: u64 = 3_600;
 
 #[derive(Parser)]
-#[command(version, about = "Manage the Rust UMTS HNB over gRPC")]
+#[command(
+    name = "umts-hnbctl",
+    version,
+    about = "Manage the Rust UMTS HNB over gRPC"
+)]
 struct Args {
     #[arg(long, global = true)]
     endpoint: Option<String>,

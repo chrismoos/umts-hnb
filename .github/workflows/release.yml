@@ -79,14 +79,16 @@ jobs:
           cargo install --locked cargo-deb --version "$CARGO_DEB_VERSION"
           mkdir -p dist
           cargo deb --locked --no-build -p umts-hnb --deb-version "$DEB_VERSION" --output dist/
-          dpkg-deb --info dist/*.deb
-          dpkg-deb --contents dist/*.deb
+          dpkg-deb --info dist/umts-hnb_*.deb
+          dpkg-deb --contents dist/umts-hnb_*.deb
 
       - name: Upload package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: umts-hnb-${{ matrix.suite }}-${{ matrix.arch }}
-          path: dist/*.deb
+          path: |
+            dist/*.deb
+            dist/*.ddeb
           if-no-files-found: error
 
   install:
@@ -111,14 +113,14 @@ jobs:
       - name: Install, upgrade in place and purge
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install --yes ./dist/*.deb
+          DEBIAN_FRONTEND=noninteractive apt-get install --yes ./dist/umts-hnb_*.deb
           umts-hnb --version
           umts-hnbctl --version
           getent passwd umts-hnb
           test -f /etc/umts-hnb/site.yaml
           test -f /usr/share/umts-hnb/defaults.yaml
           echo '# local edit' >> /etc/umts-hnb/site.yaml
-          DEBIAN_FRONTEND=noninteractive apt-get install --yes --reinstall ./dist/*.deb
+          DEBIAN_FRONTEND=noninteractive apt-get install --yes --reinstall ./dist/umts-hnb_*.deb
           grep -q '# local edit' /etc/umts-hnb/site.yaml
           DEBIAN_FRONTEND=noninteractive apt-get purge --yes umts-hnb
           test ! -e /etc/umts-hnb/site.yaml
@@ -144,7 +146,7 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/*.deb
+          subject-path: dist/*.*deb
 
       - name: Create draft release
         env:
@@ -152,4 +154,4 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
-            --title "umts-hnb ${GITHUB_REF_NAME#v}" --notes "" dist/*.deb
+            --title "umts-hnb ${GITHUB_REF_NAME#v}" --notes "" dist/*.deb dist/*.ddeb
