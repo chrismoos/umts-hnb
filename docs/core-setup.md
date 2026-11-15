@@ -207,4 +207,4 @@ core:
     bind_ip: 192.168.1.20   # HNB machine, reachable from the core
 ```
 
-Continue with [building the HNB](../README.md#build).
+Continue with [installing or building the HNB](../README.md).

@@ -78,5 +78,5 @@ the gains and `rx_delay_samples` calibration when changing the radio or backend.
 ## Other radios
 
 bladeRF radios use the `bladerf` backend, selected at build time as described
-in the [README](../README.md#build). Each radio needs its own
+in the [README](../README.md#building-from-source). Each radio needs its own
 `rx_delay_samples` calibration.
