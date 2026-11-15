@@ -5,7 +5,7 @@ members = ["rust/crates/umts-types", "rust/crates/umts-runtime", "rust/crates/um
 
 [workspace.package]
 authors = ["Chris Moos"]
-version = "0.1.0-dev"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.96"
 license = "AGPL-3.0-or-later"
