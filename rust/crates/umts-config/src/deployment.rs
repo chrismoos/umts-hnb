@@ -43,7 +43,9 @@ impl Deployment {
             if lookup(&defaults, path).is_some() {
                 bail!("operator property {path} must not be supplied by system defaults");
             }
-            if lookup(&operator, path).is_none() {
+            let applies = path != "radio.uhd_args"
+                || lookup(&operator, "radio.backend").and_then(Value::as_str) == Some("uhd");
+            if applies && lookup(&operator, path).is_none() {
                 bail!("operator configuration must specify {path}");
             }
         }

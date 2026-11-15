@@ -50,8 +50,33 @@ calibration.
 DC-HSPA is not yet stable on the PlutoSky R1, so keep `cell.packet_modes` to
 `rel99`, `hspa` and `hspa-plus`.
 
+## SoapySDR
+
+Install `libsoapysdr-dev` and the SoapySDR module for your radio, then build
+with `--features soapy`. Select the driver with `radio.soapy_args` and set
+both `tx_antenna` and `rx_antenna` to port names supported by that driver.
+
+For example, these settings select the PlutoSky R1's SoapySDR module directly:
+
+```yaml
+radio:
+  backend: soapy
+  soapy_args: driver=plutosky
+  tx_antenna: A
+  rx_antenna: A_BALANCED
+  uarfcn_dl: 4400
+  uarfcn_ul: 4175
+  tx_gain_db: 80.0
+  rx_gain_db: 40.0
+  rx_delay_samples: 38.0
+  tx_lo_offset_hz: 0
+```
+
+The radio must support hardware time and timestamped TX/RX streams. Recheck
+the gains and `rx_delay_samples` calibration when changing the radio or backend.
+
 ## Other radios
 
-bladeRF and SoapySDR radios use the `bladerf` and `soapy` backends, selected
-at build time as described in the [README](../README.md#build). Each radio
-needs its own `rx_delay_samples` calibration.
+bladeRF radios use the `bladerf` backend, selected at build time as described
+in the [README](../README.md#build). Each radio needs its own
+`rx_delay_samples` calibration.

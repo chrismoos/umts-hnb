@@ -9,6 +9,26 @@ const OPERATOR: &str =
 const BASELINE: &str =
     include_str!("../../../../../rust/test-support/fixtures/config/split-baseline.yaml");
 
+#[test]
+fn soapy_operator_does_not_require_native_uhd_arguments() {
+    let mut operator: Value = serde_yaml::from_str(OPERATOR).unwrap();
+    operator["radio"]
+        .as_mapping_mut()
+        .unwrap()
+        .remove("uhd_args");
+    let missing_uhd = serde_yaml::to_string(&operator).unwrap();
+    assert!(
+        Deployment::parse(DEFAULTS, &missing_uhd)
+            .is_err_and(|error| error.to_string().contains("radio.uhd_args"))
+    );
+    operator["radio"]["backend"] = Value::from("soapy");
+    operator["radio"]["soapy_args"] = Value::from("driver=uhd");
+    let loaded = Deployment::parse(DEFAULTS, &serde_yaml::to_string(&operator).unwrap()).unwrap();
+    assert_eq!(loaded.config.radio.soapy_args, "driver=uhd");
+    assert_eq!(loaded.config.radio.uhd_args, "");
+    assert_eq!(loaded.config.radio.tx_lo_offset_hz, 0);
+}
+
 fn unified_reference() -> Config {
     let mut reference: Config = serde_yaml::from_str(BASELINE).unwrap();
     reference.rel99.profile = Some(crate::Rel99Profile::Standard);

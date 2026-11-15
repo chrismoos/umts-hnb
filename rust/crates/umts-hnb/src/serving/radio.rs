@@ -150,9 +150,27 @@ pub(super) fn radio_plan(config: &umts_config::Config) -> Result<RadioPlan> {
                 0,
             )
         }
-        "soapy" => {
-            bail!("Soapy serving requires canonical antenna settings that are not yet configured")
-        }
+        "soapy" => (
+            DeviceConfig::Soapy {
+                device: radio.soapy_args.clone(),
+                channel: 0,
+                antenna: radio
+                    .tx_antenna
+                    .clone()
+                    .context("Soapy serving requires radio.tx_antenna")?,
+                tx_gain_db: radio.tx_gain_db,
+                rx_antenna: Some(
+                    radio
+                        .rx_antenna
+                        .clone()
+                        .context("Soapy serving requires radio.rx_antenna")?,
+                ),
+                rx_gain_db: Some(radio.rx_gain_db),
+                rx_reference_dbm: None,
+                rx_to_tx_delay_ns: None,
+            },
+            0,
+        ),
         "bladerf" => {
             ensure!(
                 radio.bladerf_rx_timestamp_offset.unwrap_or(0) == 0,

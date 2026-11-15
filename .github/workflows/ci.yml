@@ -35,7 +35,7 @@ jobs:
           $sudo apt-get update
           $sudo apt-get install --yes --no-install-recommends \
             build-essential curl git pkg-config libclang-dev \
-            libuhd-dev libboost-system-dev libsctp-dev protobuf-compiler kmod
+            libuhd-dev libsoapysdr-dev libboost-system-dev libsctp-dev protobuf-compiler kmod
 
       - name: Enable native SCTP
         run: |
@@ -77,10 +77,10 @@ jobs:
         run: cargo test --locked --release -p umts-dsp
 
       - name: Check Clippy
-        run: cargo clippy --locked --workspace --all-targets --release --features umts-hnb/uhd -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --release --features umts-hnb/uhd,umts-hnb/soapy -- -D warnings
 
       - name: Build release targets
-        run: cargo build --locked --workspace --all-targets --release --features umts-hnb/uhd
+        run: cargo build --locked --workspace --all-targets --release --features umts-hnb/uhd,umts-hnb/soapy
 
       - name: Run workspace tests
-        run: cargo test --locked --workspace --release --features umts-hnb/uhd
+        run: cargo test --locked --workspace --release --features umts-hnb/uhd,umts-hnb/soapy

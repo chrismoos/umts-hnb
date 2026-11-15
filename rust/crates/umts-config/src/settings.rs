@@ -2474,10 +2474,10 @@ pub struct RadioSettings {
     pub soapy_args: String,
     #[serde(default)]
     pub uhd_args: String,
-    #[doc = "TX antenna port. Absent selects the backend default: TX/RX on UHD, the driver default on bladeRF."]
+    #[doc = "TX antenna port. Required on Soapy. Absent selects TX/RX on UHD or the driver default on bladeRF."]
     #[serde(default)]
     pub tx_antenna: Option<String>,
-    #[doc = "RX antenna port. Absent selects the backend default: RX2 on UHD, the driver default on bladeRF."]
+    #[doc = "RX antenna port. Required on Soapy. Absent selects RX2 on UHD or the driver default on bladeRF."]
     #[serde(default)]
     pub rx_antenna: Option<String>,
     #[serde(default)]

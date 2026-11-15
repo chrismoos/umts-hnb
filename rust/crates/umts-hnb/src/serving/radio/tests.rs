@@ -242,9 +242,61 @@ fn bladerf_preserves_integer_gains_phase_and_stream_settings_without_calibration
 }
 
 #[test]
+fn soapy_preserves_explicit_ports_gains_and_device_arguments() {
+    let mut config = config();
+    config.radio.backend = "soapy".into();
+    config.radio.soapy_args = "driver=uhd,type=b200,master_clock_rate=30720000".into();
+    config.radio.uhd_args = "type=unrelated".into();
+    config.radio.tx_gain_db = 65.125;
+    config.radio.rx_gain_db = 23.75;
+    config.radio.tx_antenna = Some("TX/RX".into());
+    config.radio.rx_antenna = Some("RX2".into());
+    let plan = radio_plan(&config).unwrap();
+    assert_eq!(plan.rx_phase, 0);
+    assert_eq!(plan.hal.tx_sample_rate_hz, SAMPLE_RATE_HZ);
+    assert_eq!(plan.hal.rx_sample_rate_hz, Some(SAMPLE_RATE_HZ));
+    match plan.hal.device {
+        DeviceConfig::Soapy {
+            device,
+            channel,
+            antenna,
+            tx_gain_db,
+            rx_antenna,
+            rx_gain_db,
+            rx_reference_dbm,
+            rx_to_tx_delay_ns,
+        } => {
+            assert_eq!(device, config.radio.soapy_args);
+            assert_eq!(channel, 0);
+            assert_eq!(antenna, "TX/RX");
+            assert_eq!(rx_antenna.as_deref(), Some("RX2"));
+            assert_eq!(tx_gain_db, 65.125);
+            assert_eq!(rx_gain_db, Some(23.75));
+            assert_eq!(rx_reference_dbm, None);
+            assert_eq!(rx_to_tx_delay_ns, None);
+        }
+        _ => panic!("expected Soapy plan"),
+    }
+    config.cell.secondary_carrier.enabled = true;
+    config.cell.secondary_carrier.uarfcn_dl = Some(4425);
+    config.radio.tx_samples_per_chip = 4;
+    config.radio.tx_analog_bandwidth_hz = 10_000_000;
+    let dual = radio_plan(&config).unwrap();
+    assert_eq!(dual.downlink_hz, 882_500_000);
+    assert_eq!(dual.uplink_hz, 835_000_000);
+    assert_eq!(dual.hal.tx_sample_rate_hz, 15_360_000);
+    assert_eq!(dual.hal.rx_sample_rate_hz, Some(7_680_000));
+    config.radio.tx_antenna = None;
+    assert!(radio_plan(&config).is_err());
+    config.radio.tx_antenna = Some("TX/RX".into());
+    config.radio.rx_antenna = None;
+    assert!(radio_plan(&config).is_err());
+}
+
+#[test]
 fn unsupported_backends_and_nonfinite_gains_never_produce_a_radio_plan() {
     let mut config = config();
-    for backend in ["soapy", "lime", "network", "noop", "unknown"] {
+    for backend in ["lime", "network", "noop", "unknown"] {
         config.radio.backend = backend.into();
         assert!(radio_plan(&config).is_err());
     }
