@@ -234,7 +234,7 @@ fn parts_with_timing(timing: TxTiming) -> Parts {
         SamplesPerChip::Two,
         AccessRxSettings {
             maximum_channels: count(2),
-            minimum_coherent_fraction: 0.2,
+            minimum_peak_to_background_ratio: 20.0,
             minimum_tx_lead_chips: 0,
             messages: crate::access_message::MessageLimits {
                 capacity: count(2),

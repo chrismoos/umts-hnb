@@ -5,13 +5,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PrachReceiverSettings {
-    pub minimum_coherent_fraction: f64,
+    pub minimum_peak_to_background_ratio: f64,
 }
 
 impl Default for PrachReceiverSettings {
     fn default() -> Self {
         Self {
-            minimum_coherent_fraction: 0.05,
+            minimum_peak_to_background_ratio: 80.0,
         }
     }
 }
@@ -19,10 +19,9 @@ impl Default for PrachReceiverSettings {
 impl PrachReceiverSettings {
     pub(crate) fn validate_schema(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
-            self.minimum_coherent_fraction.is_finite()
-                && self.minimum_coherent_fraction > 0.0
-                && self.minimum_coherent_fraction <= 1.0,
-            "receiver.prach.minimum_coherent_fraction must be finite and in (0, 1]"
+            self.minimum_peak_to_background_ratio.is_finite()
+                && self.minimum_peak_to_background_ratio > 1.0,
+            "receiver.prach.minimum_peak_to_background_ratio must be finite and greater than 1"
         );
         Ok(())
     }
@@ -35,23 +34,27 @@ mod tests {
     #[test]
     fn detector_sensitivity_is_bounded_and_preserves_its_default() {
         let settings: PrachReceiverSettings = serde_yaml::from_str("{}").unwrap();
-        assert_eq!(settings.minimum_coherent_fraction, 0.05);
-        for value in [0.0, -0.1, 1.01, f64::NAN, f64::INFINITY] {
+        assert_eq!(settings.minimum_peak_to_background_ratio, 80.0);
+        for value in [0.0, -0.1, 1.0, f64::NAN, f64::INFINITY] {
             assert!(
                 PrachReceiverSettings {
-                    minimum_coherent_fraction: value
+                    minimum_peak_to_background_ratio: value
                 }
                 .validate_schema()
                 .is_err()
             );
         }
-        for value in [0.01, 0.05, 1.0] {
+        for value in [2.0, 20.0, 1_000_000.0] {
             PrachReceiverSettings {
-                minimum_coherent_fraction: value,
+                minimum_peak_to_background_ratio: value,
             }
             .validate_schema()
             .unwrap();
         }
         assert!(serde_yaml::from_str::<PrachReceiverSettings>("unknown: 1").is_err());
+        assert!(
+            serde_yaml::from_str::<PrachReceiverSettings>("minimum_coherent_fraction: 0.05")
+                .is_err()
+        );
     }
 }

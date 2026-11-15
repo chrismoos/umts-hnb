@@ -80,7 +80,7 @@ fn settings() -> AccessRxSettings {
             maximum_formats: count(2),
             maximum_buffer_bytes: 4 * 1024 * 1024,
         },
-        minimum_coherent_fraction: 0.2,
+        minimum_peak_to_background_ratio: 20.0,
         minimum_tx_lead_chips: 0,
     }
 }
@@ -161,7 +161,7 @@ fn automatic_search_is_gain_normalized_and_follows_only_advertised_occasions() {
         assert_eq!(strongest.nominal_start, at(NOMINAL));
         assert_eq!(strongest.correlation_start, at(NOMINAL + 17));
         assert_eq!(strongest.signature.number(), 13);
-        assert!(strongest.coherent_fraction >= settings().minimum_coherent_fraction);
+        assert!(strongest.peak_to_background_ratio >= settings().minimum_peak_to_background_ratio);
         assert!(strongest.mean_input_power > 0.0);
         assert_eq!(evidence.last.unwrap().nominal_start, at(NOMINAL + CYCLE));
     }
@@ -203,9 +203,9 @@ fn history_retains_overlapping_windows_across_wrap_and_rejects_unretained_or_mis
 #[test]
 fn automatic_access_rejects_invalid_policy_metadata_and_keeps_failure_terminal() {
     let mut tx = source(false);
-    for threshold in [0.0, -0.1, 1.1, f64::NAN] {
+    for threshold in [0.0, -0.1, 1.0, f64::NAN] {
         let mut invalid = settings();
-        invalid.minimum_coherent_fraction = threshold;
+        invalid.minimum_peak_to_background_ratio = threshold;
         assert!(matches!(
             AccessReceiver::new(&tx, SamplesPerChip::Two, invalid),
             Err(AccessError::Configuration)

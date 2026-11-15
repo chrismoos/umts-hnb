@@ -354,7 +354,11 @@ where
         SamplesPerChip::Two,
         AccessRxSettings {
             maximum_channels: count(1),
-            minimum_coherent_fraction: plan.config.receiver.prach.minimum_coherent_fraction,
+            minimum_peak_to_background_ratio: plan
+                .config
+                .receiver
+                .prach
+                .minimum_peak_to_background_ratio,
             minimum_tx_lead_chips: preparation
                 .air_origin()
                 .chip_rate

@@ -172,8 +172,8 @@ radio:
   bladerf_rx_timestamp_offset: null
 receiver:
   prach:
-    # Minimum coherent signal fraction for preamble detection, not an RF power in dB.
-    minimum_coherent_fraction: 0.05
+    # Preamble correlation peak power relative to its correlation background, as a linear ratio.
+    minimum_peak_to_background_ratio: 80.0
   turbo_iterations: 4
   filter_span_chips: 16
   dedicated:

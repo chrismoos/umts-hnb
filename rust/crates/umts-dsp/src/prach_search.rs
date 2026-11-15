@@ -15,6 +15,7 @@ use crate::{
 pub const MAX_SEARCH_DELAYS: usize = 8192;
 const SIGNATURE_COUNT: usize = 16;
 const PROBE_BLOCK_CHIPS: usize = 256;
+const CORRELATION_GUARD_CHIPS: usize = 4;
 
 pub struct PreambleSearchPlan {
     code: PrachCode,
@@ -112,6 +113,13 @@ pub struct TimingCorrelation {
     pub mean_input_power: f64,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct CorrelationPeak {
+    pub correlation: TimingCorrelation,
+    /// Peak power divided by mean correlation power outside the peak guard.
+    pub peak_to_background_ratio: f64,
+}
+
 pub struct PreambleTimingSearch {
     plan: Arc<PreambleSearchPlan>,
     spectrum: Vec<Complex64>,
@@ -203,6 +211,35 @@ pub struct TimingWindow<'a> {
 }
 
 impl TimingWindow<'_> {
+    pub fn strongest_peak(&self, signature: PreambleSignature) -> Option<CorrelationPeak> {
+        let plan = &self.receiver.plan;
+        let row = plan.rows[usize::from(signature.number())]?;
+        let values = &self.receiver.correlations[row * plan.delays..(row + 1) * plan.delays];
+        let (delay, amplitude) = values
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.norm_sqr().total_cmp(&b.norm_sqr()))?;
+        let peak_power = amplitude.norm_sqr();
+        if peak_power == 0.0 {
+            return None;
+        }
+        let mut background = CompensatedSum::default();
+        let mut count = 0;
+        for (index, value) in values.iter().enumerate() {
+            if index.abs_diff(delay) > CORRELATION_GUARD_CHIPS {
+                background.add(value.norm_sqr());
+                count += 1;
+            }
+        }
+        if count == 0 {
+            return None;
+        }
+        Some(CorrelationPeak {
+            correlation: self.correlation(delay, signature).ok()??,
+            peak_to_background_ratio: peak_power / (background.value() / count as f64),
+        })
+    }
+
     pub fn correlation(
         &self,
         delay: usize,

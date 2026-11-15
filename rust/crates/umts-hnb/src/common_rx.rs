@@ -50,7 +50,7 @@ pub enum AccessError {
 pub struct AccessRxSettings {
     pub maximum_channels: NonZeroUsize,
     pub messages: MessageLimits,
-    pub minimum_coherent_fraction: f64,
+    pub minimum_peak_to_background_ratio: f64,
     pub minimum_tx_lead_chips: u64,
 }
 
@@ -80,6 +80,7 @@ pub struct AccessSearchPeak {
     pub nominal_start: ChipInstant,
     pub correlation_start: ChipInstant,
     pub coherent_fraction: f64,
+    pub peak_to_background_ratio: f64,
     /// Mean complex power of filtered chips, not raw ADC power or pilot SIR.
     pub mean_input_power: f64,
 }
@@ -90,11 +91,11 @@ pub struct AccessSearchPeak {
     reason = "Retains the complete observation for diagnostic snapshots and replay."
 )]
 pub struct AccessSearchEvidence {
-    pub minimum_coherent_fraction: f64,
+    pub minimum_peak_to_background_ratio: f64,
     pub signature_peaks: u64,
     pub last: Option<AccessSearchPeak>,
     pub strongest_coherence: Option<AccessSearchPeak>,
-    /// Power is compared only at each signature's coherence-maximizing delay.
+    /// Power is compared only at each signature's correlation-maximizing delay.
     pub strongest_peak_input_power: Option<AccessSearchPeak>,
 }
 
@@ -201,9 +202,8 @@ impl AccessReceiver {
         if count == 0
             || count > settings.maximum_channels.get()
             || count > MAX_PRACH_CHANNELS
-            || !settings.minimum_coherent_fraction.is_finite()
-            || !(0.0..=1.0).contains(&settings.minimum_coherent_fraction)
-            || settings.minimum_coherent_fraction == 0.0
+            || !settings.minimum_peak_to_background_ratio.is_finite()
+            || settings.minimum_peak_to_background_ratio <= 1.0
         {
             return Err(AccessError::Configuration);
         }
@@ -260,7 +260,7 @@ impl AccessReceiver {
             failed: false,
             counters: AccessCounters::default(),
             search_evidence: AccessSearchEvidence {
-                minimum_coherent_fraction: settings.minimum_coherent_fraction,
+                minimum_peak_to_background_ratio: settings.minimum_peak_to_background_ratio,
                 ..AccessSearchEvidence::default()
             },
         })
@@ -432,9 +432,10 @@ impl AccessReceiver {
                     continue;
                 }
                 let signature = PreambleSignature::new(number).map_err(AccessError::Dsp)?;
-                let Some(peak) = window.strongest(signature) else {
+                let Some(detection) = window.strongest_peak(signature) else {
                     continue;
                 };
+                let peak = detection.correlation;
                 self.search_evidence.observe(AccessSearchPeak {
                     code: peak.code,
                     signature,
@@ -442,9 +443,12 @@ impl AccessReceiver {
                     nominal_start: nominal,
                     correlation_start: peak.correlation_start,
                     coherent_fraction: peak.coherent_fraction,
+                    peak_to_background_ratio: detection.peak_to_background_ratio,
                     mean_input_power: peak.mean_input_power,
                 });
-                if peak.coherent_fraction < self.settings.minimum_coherent_fraction {
+                if detection.peak_to_background_ratio
+                    < self.settings.minimum_peak_to_background_ratio
+                {
                     continue;
                 }
                 self.counters.candidates = self.counters.candidates.saturating_add(1);

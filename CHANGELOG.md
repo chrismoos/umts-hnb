@@ -2,4 +2,5 @@
 
 ## [Unreleased]
 
-Initial release.
+- Improve PRACH detection.
+- Initial release.

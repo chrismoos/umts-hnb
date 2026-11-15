@@ -349,7 +349,7 @@ properties! {
     "radio.bladerf_stream_buffer_samples": u32, false;
     "radio.bladerf_stream_transfers": u32, false;
     "radio.bladerf_rx_timestamp_offset": Option<i64>, false;
-    "receiver.prach.minimum_coherent_fraction": f64, false;
+    "receiver.prach.minimum_peak_to_background_ratio": f64, false;
     "receiver.turbo_iterations": u32, false;
     "receiver.filter_span_chips": u16, false;
     "receiver.dedicated.maximum_shared_bytes": u32, false;

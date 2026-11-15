@@ -328,3 +328,123 @@ fn malformed_searches_silence_and_masks_fail_closed_and_recover() {
         at(103)
     );
 }
+
+#[test]
+fn correlation_background_detects_a_weak_preamble_under_a_strong_tone() {
+    let signature = PreambleSignature::new(13).unwrap();
+    let code = PrachCode::new(0).unwrap();
+    let plan = Arc::new(PreambleSearchPlan::new(code, 1 << 13, 0..PREAMBLE_CHIPS, 257).unwrap());
+    let mut search = PreambleTimingSearch::new(plan.clone());
+    let mut reference = vec![Complex32::default(); PREAMBLE_CHIPS];
+    code.write_preamble(signature, &mut reference).unwrap();
+    for delay in [0, 40, 256] {
+        for gain in [1e-12_f32, 1.0, 1e12] {
+            let mut input: Vec<_> = (0..plan.input_length())
+                .map(|i| Complex32::from_polar(gain, i as f32 * 0.071))
+                .collect();
+            for (sample, &chip) in input[delay..delay + PREAMBLE_CHIPS]
+                .iter_mut()
+                .zip(&reference)
+            {
+                *sample += chip * (0.15 * gain);
+            }
+            let window = search.search(at(0), &input).unwrap();
+            let peak = window.strongest_peak(signature).unwrap();
+            assert_eq!(peak.correlation.correlation_start, at(delay as u64));
+            assert!(peak.correlation.coherent_fraction < 0.05);
+            assert!(peak.peak_to_background_ratio >= 80.0);
+        }
+    }
+}
+
+#[test]
+fn correlation_background_rejects_noise_tones_impulses_and_silence() {
+    let signature = PreambleSignature::new(13).unwrap();
+    let plan = Arc::new(
+        PreambleSearchPlan::new(PrachCode::new(0).unwrap(), 1 << 13, 0..PREAMBLE_CHIPS, 257)
+            .unwrap(),
+    );
+    let mut search = PreambleTimingSearch::new(plan.clone());
+    let mut input = vec![Complex32::default(); plan.input_length()];
+    assert!(
+        search
+            .search(at(0), &input)
+            .unwrap()
+            .strongest_peak(signature)
+            .is_none()
+    );
+    input[1000] = Complex32::new(1.0, 0.0);
+    assert!(
+        search
+            .search(at(0), &input)
+            .unwrap()
+            .strongest_peak(signature)
+            .unwrap()
+            .peak_to_background_ratio
+            < 20.0
+    );
+    for (i, x) in input.iter_mut().enumerate() {
+        *x = Complex32::from_polar(1.0, i as f32 * 0.071);
+    }
+    assert!(
+        search
+            .search(at(0), &input)
+            .unwrap()
+            .strongest_peak(signature)
+            .unwrap()
+            .peak_to_background_ratio
+            < 20.0
+    );
+    let mut state = 0x7654_3210_abcd_ef01_u64;
+    let mut uniform = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        ((state >> 40) as f64 + 0.5) / (1_u64 << 24) as f64
+    };
+    for _ in 0..8192 {
+        for x in &mut input {
+            let amplitude = (-2.0 * uniform().ln()).sqrt();
+            let angle = std::f64::consts::TAU * uniform();
+            *x = Complex32::from_polar(amplitude as f32, angle as f32);
+        }
+        let peak = search
+            .search(at(0), &input)
+            .unwrap()
+            .strongest_peak(signature)
+            .unwrap();
+        assert!(
+            peak.peak_to_background_ratio < 20.0,
+            "{}",
+            peak.peak_to_background_ratio
+        );
+    }
+}
+
+#[test]
+fn correlation_background_retains_two_resolved_paths_and_rejects_unavailable_signatures() {
+    let signature = PreambleSignature::new(13).unwrap();
+    let code = PrachCode::new(0).unwrap();
+    let plan = Arc::new(PreambleSearchPlan::new(code, 1 << 13, 0..PREAMBLE_CHIPS, 257).unwrap());
+    let mut search = PreambleTimingSearch::new(plan.clone());
+    let mut reference = vec![Complex32::default(); PREAMBLE_CHIPS];
+    code.write_preamble(signature, &mut reference).unwrap();
+    let mut input = vec![Complex32::default(); plan.input_length()];
+    for delay in [20, 100] {
+        for (sample, &chip) in input[delay..delay + PREAMBLE_CHIPS]
+            .iter_mut()
+            .zip(&reference)
+        {
+            *sample += chip;
+        }
+    }
+    let window = search.search(at(0), &input).unwrap();
+    let peak = window.strongest_peak(signature).unwrap();
+    assert!([20, 100].contains(&peak.correlation.correlation_start.index));
+    assert!(peak.peak_to_background_ratio >= 80.0);
+    assert!(
+        window
+            .strongest_peak(PreambleSignature::new(7).unwrap())
+            .is_none()
+    );
+}
