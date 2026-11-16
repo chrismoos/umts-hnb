@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use crate::{Backend, Error, Limits, Metadata, Notification, SendResult};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 pub(crate) const MIN_NOTIFICATION_BYTES: usize = 32;
 
@@ -26,19 +26,20 @@ pub(crate) enum Socket {
 impl Socket {
     pub(crate) fn connect(
         backend: Backend,
+        local: Option<IpAddr>,
         peer: SocketAddr,
         limits: Limits,
     ) -> Result<(Self, bool), Error> {
         match backend {
             #[cfg(target_os = "linux")]
-            Backend::Native => crate::native::connect(peer, limits)
+            Backend::Native => crate::native::connect(local, peer, limits)
                 .map(|(socket, open)| (Self::Native(socket), open)),
             #[cfg(feature = "usrsctp")]
-            Backend::Usrsctp { udp } => crate::userspace::Socket::connect(peer, limits, udp)
+            Backend::Usrsctp { udp } => crate::userspace::Socket::connect(local, peer, limits, udp)
                 .map(|socket| (Self::Userspace(socket), false)),
             #[allow(unreachable_patterns)]
             unavailable => {
-                let _ = (peer, limits);
+                let _ = (local, peer, limits);
                 Err(Error::BackendUnavailable(unavailable))
             }
         }

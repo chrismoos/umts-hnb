@@ -17,7 +17,7 @@ pub use records::{Metadata, Notification};
 use socket::Socket;
 use std::{
     io,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     num::{NonZeroU16, NonZeroUsize},
 };
 use zeroize::Zeroize;
@@ -138,6 +138,19 @@ impl Association {
         Self::connect_with(Backend::Native, peer, limits)
     }
     pub fn connect_with(backend: Backend, peer: SocketAddr, limits: Limits) -> Result<Self, Error> {
+        Self::connect_from(backend, None, peer, limits)
+    }
+    /// Binds to `local` before connecting, so the association offers the peer only that address.
+    /// `None` lets kernel SCTP offer every local address.
+    pub fn connect_from(
+        backend: Backend,
+        local: Option<IpAddr>,
+        peer: SocketAddr,
+        limits: Limits,
+    ) -> Result<Self, Error> {
+        if local.is_some_and(|local| local.is_ipv4() != peer.is_ipv4() || local.is_unspecified()) {
+            return Err(Error::Configuration);
+        }
         Self::validate_limits(limits)?;
         let mut receive = Vec::new();
         receive
@@ -145,7 +158,7 @@ impl Association {
             .map_err(|_| Error::Capacity)?;
         receive.resize(limits.receive_chunk_bytes.get(), 0);
         let assembler = Assembler::new(limits.maximum_record_bytes)?;
-        let (socket, connected) = Socket::connect(backend, peer, limits)?;
+        let (socket, connected) = Socket::connect(backend, local, peer, limits)?;
         Ok(Self {
             socket,
             state: if connected {

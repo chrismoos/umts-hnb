@@ -93,18 +93,21 @@ fn indicator_powers(config: &Config, budget: Option<&downlink_power::Plan>) -> I
 
 fn connect_core(config: &Config, peer: SocketAddr) -> Result<umts_sctp::Association> {
     let backend = sctp_backend(config)?;
-    umts_sctp::Association::connect_with(backend, peer, bootstrap::sctp_limits()).map_err(|error| {
-        let retry = !matches!(
-            error,
-            umts_sctp::Error::BackendUnavailable(_) | umts_sctp::Error::Configuration
-        );
-        let error = anyhow::Error::new(error).context("open Iuh SCTP association");
-        if retry {
-            error.context(CoreUnavailable)
-        } else {
-            error
-        }
-    })
+    let local = config.hnbgw_local_address()?;
+    umts_sctp::Association::connect_from(backend, local, peer, bootstrap::sctp_limits()).map_err(
+        |error| {
+            let retry = !matches!(
+                error,
+                umts_sctp::Error::BackendUnavailable(_) | umts_sctp::Error::Configuration
+            );
+            let error = anyhow::Error::new(error).context("open Iuh SCTP association");
+            if retry {
+                error.context(CoreUnavailable)
+            } else {
+                error
+            }
+        },
+    )
 }
 
 fn sctp_backend(config: &Config) -> Result<umts_sctp::Backend> {

@@ -6,11 +6,33 @@ use crate::{Error, Limits, Metadata, Notification, SendResult, UdpEncapsulation,
 use std::{
     io,
     mem::size_of,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     num::NonZeroU16,
     ptr::NonNull,
     sync::{Mutex, PoisonError},
 };
+
+fn routed_source(peer: SocketAddr) -> Result<SocketAddr, Error> {
+    let route = std::net::UdpSocket::bind(if peer.is_ipv4() {
+        "0.0.0.0:0"
+    } else {
+        "[::]:0"
+    })
+    .map_err(|source| Error::Io {
+        operation: "source address socket",
+        source,
+    })?;
+    route.connect(peer).map_err(|source| Error::Io {
+        operation: "source address route",
+        source,
+    })?;
+    let mut local = route.local_addr().map_err(|source| Error::Io {
+        operation: "source address",
+        source,
+    })?;
+    local.set_port(0);
+    Ok(local)
+}
 
 #[allow(
     non_camel_case_types,
@@ -72,6 +94,7 @@ fn initialize(udp: Option<UdpEncapsulation>) -> Result<(), Error> {
 
 impl Socket {
     pub(crate) fn connect(
+        local: Option<IpAddr>,
         peer: SocketAddr,
         limits: Limits,
         udp: Option<UdpEncapsulation>,
@@ -157,24 +180,10 @@ impl Socket {
                 },
             )?;
         }
-        let route = std::net::UdpSocket::bind(if peer.is_ipv4() {
-            "0.0.0.0:0"
-        } else {
-            "[::]:0"
-        })
-        .map_err(|source| Error::Io {
-            operation: "source address socket",
-            source,
-        })?;
-        route.connect(peer).map_err(|source| Error::Io {
-            operation: "source address route",
-            source,
-        })?;
-        let mut local = route.local_addr().map_err(|source| Error::Io {
-            operation: "source address",
-            source,
-        })?;
-        local.set_port(0);
+        let local = match local {
+            Some(local) => SocketAddr::new(local, 0),
+            None => routed_source(peer)?,
+        };
         socket.bind_address(local)?;
         let address = socket2::SockAddr::from(peer);
         // usrsctp copies the borrowed host sockaddr, including Darwin length and IPv6 scope fields.

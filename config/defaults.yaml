@@ -33,6 +33,7 @@ core:
   hnbgw:
     udp_encapsulation_port: null
     udp_encapsulation_local_port: null
+    local_address: null
   gtpu:
     advertise_ip: null
     allow_ephemeral_port: false

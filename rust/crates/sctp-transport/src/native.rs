@@ -7,7 +7,7 @@ use crate::{Error, Limits, Metadata, SendResult};
 use std::{
     io,
     mem::{size_of, size_of_val},
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     os::fd::{AsRawFd, FromRawFd, OwnedFd},
 };
 
@@ -89,7 +89,11 @@ fn option<T>(fd: &OwnedFd, name: i32, value: &T) -> Result<(), Error> {
     }
     Ok(())
 }
-pub(crate) fn connect(peer: SocketAddr, limits: Limits) -> Result<(OwnedFd, bool), Error> {
+pub(crate) fn connect(
+    local: Option<IpAddr>,
+    peer: SocketAddr,
+    limits: Limits,
+) -> Result<(OwnedFd, bool), Error> {
     let family = if peer.is_ipv4() {
         libc::AF_INET
     } else {
@@ -126,6 +130,13 @@ pub(crate) fn connect(peer: SocketAddr, limits: Limits) -> Result<(OwnedFd, bool
         SCTP_EVENTS,
         &[1u8, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0],
     )?;
+    if let Some(local) = local {
+        let address = socket2::SockAddr::from(SocketAddr::new(local, 0));
+        // bind copies the initialized address and does not retain the pointer.
+        if unsafe { libc::bind(fd.as_raw_fd(), address.as_ptr().cast(), address.len()) } < 0 {
+            return Err(io_error("bind"));
+        }
+    }
     let result = match peer {
         SocketAddr::V4(peer) => {
             let address = libc::sockaddr_in {
@@ -398,6 +409,78 @@ mod tests {
     #[test]
     fn real_kernel_records_preserve_ppid_stream_eor_and_backpressure() {
         record_roundtrip(crate::Backend::Native, 0);
+    }
+
+    /// IPv4 addresses the server side of an association holds for its peer (Linux SCTP_GET_PEER_ADDRS).
+    fn peer_addresses(server: &OwnedFd) -> Vec<Ipv4Addr> {
+        const SCTP_GET_PEER_ADDRS: libc::c_int = 108;
+        // struct sctp_getaddrs: assoc_id (i32), addr_num (u32), then packed sockaddrs.
+        const HEADER_BYTES: usize = 8;
+        let mut buffer = [0u8; 512];
+        let mut length = buffer.len() as libc::socklen_t;
+        // The buffer outlives the call, and length bounds what the kernel writes.
+        let result = unsafe {
+            libc::getsockopt(
+                server.as_raw_fd(),
+                libc::IPPROTO_SCTP,
+                SCTP_GET_PEER_ADDRS,
+                buffer.as_mut_ptr().cast(),
+                &mut length,
+            )
+        };
+        assert_eq!(
+            result,
+            0,
+            "SCTP_GET_PEER_ADDRS: {}",
+            io::Error::last_os_error()
+        );
+        let count = u32::from_ne_bytes(buffer[4..HEADER_BYTES].try_into().unwrap());
+        buffer[HEADER_BYTES..]
+            .chunks_exact(size_of::<libc::sockaddr_in>())
+            .take(count as usize)
+            .map(|entry| {
+                assert_eq!(
+                    u16::from_ne_bytes([entry[0], entry[1]]),
+                    libc::AF_INET as u16
+                );
+                Ipv4Addr::new(entry[4], entry[5], entry[6], entry[7])
+            })
+            .collect()
+    }
+
+    #[test]
+    fn real_kernel_bound_local_address_is_the_only_address_offered() {
+        let local = Ipv4Addr::new(127, 0, 0, 3);
+        let (listener, address) = listener(0, Ipv4Addr::LOCALHOST);
+        let limits = Limits {
+            maximum_record_bytes: NonZeroUsize::new(4096).unwrap(),
+            receive_chunk_bytes: NonZeroUsize::new(128).unwrap(),
+            outbound_streams: NonZeroU16::new(2).unwrap(),
+            inbound_streams: NonZeroU16::new(2).unwrap(),
+        };
+        let mut client =
+            Association::connect_from(crate::Backend::Native, Some(local.into()), address, limits)
+                .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let server = loop {
+            client.complete_connect().unwrap();
+            // accept4 returns a new exclusive descriptor. Null address outputs are permitted by the socket API.
+            let raw = unsafe {
+                libc::accept4(
+                    listener.as_raw_fd(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+                )
+            };
+            if raw >= 0 {
+                // This successful accept4 descriptor has not been transferred to another owner.
+                break unsafe { OwnedFd::from_raw_fd(raw) };
+            }
+            assert!(retry(&io::Error::last_os_error()));
+            before(deadline);
+        };
+        assert_eq!(peer_addresses(&server), [local]);
     }
 
     #[cfg(feature = "usrsctp")]

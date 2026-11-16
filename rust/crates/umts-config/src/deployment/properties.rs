@@ -225,6 +225,7 @@ properties! {
     "core.hnbgw.transport": HnbgwTransport, true;
     "core.hnbgw.udp_encapsulation_port": Option<u16>, false;
     "core.hnbgw.udp_encapsulation_local_port": Option<u16>, false;
+    "core.hnbgw.local_address": Option<String>, false;
     "core.gtpu.bind_ip": String, true;
     "core.gtpu.bind_port": u16, false;
     "core.gtpu.advertise_ip": Option<String>, false;

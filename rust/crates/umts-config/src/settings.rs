@@ -1420,6 +1420,9 @@ pub struct HnbgwConfig {
     #[doc = "Local UDP port for SCTP over UDP. Absent selects a free port."]
     #[serde(default)]
     pub udp_encapsulation_local_port: Option<u16>,
+    #[doc = "Local IP address for the Iuh association, the only address offered to the HNB-GW.\nAbsent lets kernel SCTP offer every local address."]
+    #[serde(default)]
+    pub local_address: Option<String>,
 }
 impl HnbgwConfig {
     pub fn validate_schema(&self) -> anyhow::Result<()> {

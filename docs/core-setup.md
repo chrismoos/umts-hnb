@@ -203,8 +203,18 @@ address for packet data:
 core:
   hnbgw:
     address: 192.168.1.10
+    local_address: 192.168.1.20
   gtpu:
     bind_ip: 192.168.1.20   # HNB machine, reachable from the core
+```
+
+Set `local_address` so that the Iuh SCTP association uses the intended
+address. Bind the HNB-GW the same way in `/etc/osmocom/osmo-hnbgw.cfg`:
+
+```
+hnbgw
+ iuh
+  local-ip 192.168.1.10
 ```
 
 Continue with [installing or building the HNB](../README.md).

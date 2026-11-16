@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 
 use anyhow::{Context, Result, anyhow, bail};
 mod deployment;
@@ -449,6 +449,7 @@ impl Config {
             Some(0) => bail!("hnbgw.udp_encapsulation_local_port must be nonzero"),
             _ => {}
         }
+        self.hnbgw_local_address()?;
         for (name, antenna) in [
             ("radio.tx_antenna", &self.radio.tx_antenna),
             ("radio.rx_antenna", &self.radio.rx_antenna),
@@ -469,6 +470,26 @@ impl Config {
             .advertise_ip
             .as_deref()
             .unwrap_or(&self.core.gtpu.bind_ip)
+    }
+
+    pub fn hnbgw_local_address(&self) -> Result<Option<IpAddr>> {
+        let Some(text) = self.core.hnbgw.local_address.as_deref() else {
+            return Ok(None);
+        };
+        let local = text
+            .parse::<IpAddr>()
+            .with_context(|| format!("hnbgw.local_address must be an IP address: {text}"))?;
+        if local.is_unspecified() || local.is_multicast() {
+            bail!("hnbgw.local_address must be a unicast local address, not {local}");
+        }
+        if let Ok(hnbgw) = self.core.hnbgw.address.parse::<IpAddr>()
+            && hnbgw.is_ipv4() != local.is_ipv4()
+        {
+            bail!(
+                "hnbgw.local_address {local} and hnbgw.address {hnbgw} must use the same IP version"
+            );
+        }
+        Ok(Some(local))
     }
 }
 
@@ -1410,6 +1431,22 @@ mod tests {
         assert!(c.validate().is_ok());
         c.core.hnbgw.udp_encapsulation_local_port = Some(0);
         assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn hnbgw_local_address_is_a_specific_address_of_the_hnbgw_family() {
+        let mut c = base_cfg();
+        assert_eq!(c.hnbgw_local_address().unwrap(), None);
+        c.core.hnbgw.local_address = Some("127.0.0.1".into());
+        assert_eq!(
+            c.hnbgw_local_address().unwrap(),
+            Some(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        );
+        assert!(c.validate().is_ok());
+        for invalid in ["0.0.0.0", "224.0.0.1", "::1", "hnb.example"] {
+            c.core.hnbgw.local_address = Some(invalid.into());
+            assert!(c.validate().is_err(), "{invalid} must be rejected");
+        }
     }
 
     const MINIMAL_YAML: &str = r#"

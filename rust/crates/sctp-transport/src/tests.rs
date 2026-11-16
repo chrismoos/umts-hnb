@@ -37,6 +37,21 @@ fn backend_selection_is_explicit_without_fallback() {
     );
 }
 #[test]
+fn local_address_must_be_specific_and_match_the_peer_family() {
+    let peer = "192.0.2.1:29169".parse().unwrap();
+    for local in ["0.0.0.0", "2001:db8::1"] {
+        assert!(matches!(
+            Association::connect_from(
+                Backend::Native,
+                Some(local.parse().unwrap()),
+                peer,
+                limits()
+            ),
+            Err(Error::Configuration)
+        ));
+    }
+}
+#[test]
 fn reassembly_keeps_full_record_until_upper_admission() {
     let mut assembler = Assembler::new(count(8)).unwrap();
     assembler.append(metadata(), &[1, 2], false).unwrap();
