@@ -24,17 +24,13 @@ jobs:
             image: ubuntu:24.04
             arch: amd64
             runner: ubuntu-24.04
-            rustflags: -C target-cpu=x86-64-v3
           - suite: resolute
             image: ubuntu:26.04
             arch: amd64
             runner: ubuntu-24.04
-            rustflags: -C target-cpu=x86-64-v3
     env:
       CARGO_TERM_COLOR: always
       CARGO_BUILD_JOBS: '2'
-      # Overrides target-cpu=native from .cargo/config.toml. The preinst script checks the same level.
-      RUSTFLAGS: ${{ matrix.rustflags }}
       CARGO_DEB_VERSION: 3.8.0
     steps:
       - name: Install build dependencies
@@ -70,8 +66,19 @@ jobs:
           esac
           echo "DEB_VERSION=$(echo "$crate_version" | tr - '~')-1~${{ matrix.suite }}" >> "$GITHUB_ENV"
 
-      - name: Build binaries
+      # RUSTFLAGS overrides target-cpu=native from .cargo/config.toml. The preinst script checks
+      # x86-64-v2 and the postinst selects the x86-64-v3 umts-hnb when the CPU supports it.
+      - name: Build x86-64-v2 binaries
+        env:
+          RUSTFLAGS: -C target-cpu=x86-64-v2
         run: cargo build --locked --release -p umts-hnb -p umts-management --features umts-hnb/uhd
+
+      - name: Build x86-64-v3 umts-hnb
+        env:
+          RUSTFLAGS: -C target-cpu=x86-64-v3
+        run: |
+          cargo build --locked --release -p umts-hnb --features umts-hnb/uhd --target-dir target/x86-64-v3
+          cp target/x86-64-v3/release/umts-hnb target/release/umts-hnb-x86-64-v3
 
       - name: Build package
         run: |
@@ -113,7 +120,8 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install --yes ./dist/umts-hnb_*.deb
-          umts-hnb --version
+          umts-hnb --version | grep -F '(x86-64-v3)'
+          /usr/lib/umts-hnb/umts-hnb-x86-64-v2 --version | grep -F '(x86-64-v2)'
           umts-hnbctl --version
           getent passwd umts-hnb
           test -f /etc/umts-hnb/site.yaml

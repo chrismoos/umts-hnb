@@ -11,6 +11,26 @@ fn command() -> Command {
 }
 
 #[test]
+fn version_names_the_x86_64_level_the_binary_was_built_for() {
+    let output = command().arg("--version").output().unwrap();
+    assert!(output.status.success());
+    let version = env!("CARGO_PKG_VERSION");
+    let expected = if cfg!(all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        target_feature = "fma",
+        target_feature = "bmi2"
+    )) {
+        format!("umts-hnb {version} (x86-64-v3)\n")
+    } else if cfg!(all(target_arch = "x86_64", target_feature = "sse4.2")) {
+        format!("umts-hnb {version} (x86-64-v2)\n")
+    } else {
+        format!("umts-hnb {version}\n")
+    };
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+}
+
+#[test]
 fn deployment_yaml_is_accepted_without_hardware() {
     let output = command()
         .args(["--check", "-c"])

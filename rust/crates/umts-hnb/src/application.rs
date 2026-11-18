@@ -18,8 +18,21 @@ const SHUTDOWN_REPORT_INTERVAL: Duration = Duration::from_secs(1);
 const STATUS_REPORT_INTERVAL: Duration = Duration::from_secs(1);
 const SHUTDOWN_RETRY_INTERVAL: Duration = Duration::from_millis(10);
 
+const VERSION: &str = if cfg!(all(
+    target_arch = "x86_64",
+    target_feature = "avx2",
+    target_feature = "fma",
+    target_feature = "bmi2"
+)) {
+    concat!(env!("CARGO_PKG_VERSION"), " (x86-64-v3)")
+} else if cfg!(all(target_arch = "x86_64", target_feature = "sse4.2")) {
+    concat!(env!("CARGO_PKG_VERSION"), " (x86-64-v2)")
+} else {
+    env!("CARGO_PKG_VERSION")
+};
+
 #[derive(Parser)]
-#[command(version, about = "UMTS Home Node B with Rel99 and HSPA support.")]
+#[command(version = VERSION, about = "UMTS Home Node B with Rel99 and HSPA support.")]
 struct Args {
     #[arg(
         short,

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 set -e
 
-# The amd64 build targets x86-64-v3. Without these flags the binaries stop with SIGILL.
-required_x86_flags="avx avx2 bmi1 bmi2 f16c fma abm movbe xsave"
+# The oldest amd64 build targets x86-64-v2. Without these flags the binaries stop with SIGILL.
+required_x86_flags="cx16 lahf_lm pni popcnt sse4_1 sse4_2 ssse3"
 
 case "$1" in
 install|upgrade)
@@ -17,7 +17,7 @@ install|upgrade)
             esac
         done
         if [ -n "$missing" ]; then
-            echo "umts-hnb requires an x86-64-v3 CPU (Intel Haswell, AMD Zen or later)." >&2
+            echo "umts-hnb requires an x86-64-v2 CPU (Intel Nehalem, AMD Bulldozer or later)." >&2
             echo "This CPU is missing:$missing" >&2
             exit 1
         fi

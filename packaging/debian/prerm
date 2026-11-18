@@ -1,0 +1,11 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -e
+
+#DEBHELPER#
+
+if [ "$1" = remove ]; then
+    update-alternatives --remove-all umts-hnb 2>/dev/null || true
+fi
+
+exit 0

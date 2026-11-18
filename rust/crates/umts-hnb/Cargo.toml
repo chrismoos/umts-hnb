@@ -84,7 +84,8 @@ conf-files = ["/etc/umts-hnb/site.yaml"]
 maintainer-scripts = "../../../packaging/debian/"
 systemd-units = { unit-scripts = "../../../packaging/debian/", enable = false, start = false }
 assets = [
-    ["target/release/umts-hnb", "usr/bin/", "755"],
+    ["target/release/umts-hnb", "usr/lib/umts-hnb/umts-hnb-x86-64-v2", "755"],
+    ["target/release/umts-hnb-x86-64-v3", "usr/lib/umts-hnb/", "755"],
     ["target/release/umts-hnbctl", "usr/bin/", "755"],
     ["../../../config/defaults.yaml", "usr/share/umts-hnb/", "644"],
     ["../../../config/example.yaml", "usr/share/umts-hnb/", "644"],

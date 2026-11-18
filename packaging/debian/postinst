@@ -2,7 +2,28 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 set -e
 
+libdir=/usr/lib/umts-hnb
+# Running the x86-64-v3 build without these flags stops it with SIGILL.
+v3_x86_flags="avx avx2 bmi1 bmi2 f16c fma abm movbe xsave"
+
+has_v3_flags() {
+    [ -r /proc/cpuinfo ] || return 1
+    flags=" $(grep -m1 '^flags' /proc/cpuinfo | cut -d: -f2) "
+    for flag in $v3_x86_flags; do
+        case "$flags" in
+        *" $flag "*) ;;
+        *) return 1 ;;
+        esac
+    done
+}
+
 if [ "$1" = configure ]; then
+    update-alternatives --install /usr/bin/umts-hnb umts-hnb "$libdir/umts-hnb-x86-64-v2" 20
+    if has_v3_flags; then
+        update-alternatives --install /usr/bin/umts-hnb umts-hnb "$libdir/umts-hnb-x86-64-v3" 30
+    elif update-alternatives --list umts-hnb | grep -qx "$libdir/umts-hnb-x86-64-v3"; then
+        update-alternatives --remove umts-hnb "$libdir/umts-hnb-x86-64-v3"
+    fi
     modprobe sctp 2>/dev/null || true
     if [ -z "$2" ]; then
         cat <<'EOF'
