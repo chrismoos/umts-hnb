@@ -4,6 +4,11 @@ use super::{PilotSirTarget, PowerControlError, ReceiveIdentity};
 use umts_types::{UeKey, time::ChipInstant};
 
 const ERROR_STEP_DB: f64 = 0.25;
+const SMALL_EDCH_TRANSPORT_BITS: usize = 1024;
+const LOAD_MEMORY_CHIPS: u64 = 384_000; // 100 ms.
+const SCHEDULING_MEMORY_CHIPS: u64 = 3_840_000; // 1 s.
+// TS 25.321 Table 9.2.5.3.2-1: index 10 is at most 129 bytes, about one small block.
+const SMALL_BUFFER_INDEX: u8 = 10;
 const MAXIMUM_TARGET_DB: f64 = 45.0;
 const DCH_TRANSPORTS: usize = 32;
 const EDCH_STREAM: usize = DCH_TRANSPORTS;
@@ -83,6 +88,8 @@ pub struct LinkCrcObservation {
     pub stream: CrcStream,
     pub crc_counts: umts_dsp::transport_blocks::CrcCounts,
     pub eligibility: CrcEligibility,
+    pub edch_transport_bits: Option<usize>,
+    pub scheduling: Option<umts_mac::hsupa::scheduling::SchedulingInformation>,
 }
 
 impl LinkCrcObservation {
@@ -110,6 +117,8 @@ impl LinkCrcObservation {
                     ),
                     crc_counts: observation.crc_counts,
                     eligibility,
+                    edch_transport_bits: None,
+                    scheduling: None,
                 }
             }
             super::UplinkDecodeObservation::Edch {
@@ -119,10 +128,14 @@ impl LinkCrcObservation {
                 feedback,
                 outcome,
                 presence_log_likelihood,
+                transport_bits,
+                scheduling,
             } => Self {
                 identity,
                 start,
                 stream: CrcStream::Edch,
+                edch_transport_bits: Some(transport_bits),
+                scheduling,
                 crc_counts: umts_dsp::transport_blocks::CrcCounts {
                     passed: usize::from(outcome == BlockOutcome::Decoded),
                     failed: usize::from(matches!(outcome, BlockOutcome::InvalidCrc { .. })),
@@ -179,6 +192,9 @@ pub struct LinkOuterLoop {
     target: PilotSirTarget,
     last: [Option<(u64, std::num::NonZeroU64)>; CRC_STREAMS],
     counters: OuterLoopCounters,
+    last_large_edch: Option<u64>,
+    last_active_dch: Option<u64>,
+    last_scheduling: Option<(u64, u8)>,
 }
 
 impl LinkOuterLoop {
@@ -189,6 +205,9 @@ impl LinkOuterLoop {
             target: PilotSirTarget::from_db(settings.initial)?,
             last: [None; CRC_STREAMS],
             counters: OuterLoopCounters::default(),
+            last_large_edch: None,
+            last_active_dch: None,
+            last_scheduling: None,
         })
     }
 
@@ -218,6 +237,11 @@ impl LinkOuterLoop {
             return Ok(());
         }
         self.last[index] = Some((observation.start.index, observation.identity.configuration));
+        if let Some(scheduling) = observation.scheduling
+            && observation.crc_counts.passed != 0
+        {
+            self.last_scheduling = Some((observation.start.index, scheduling.total_buffer_index));
+        }
         let excluded = match observation.eligibility {
             CrcEligibility::AirLink => None,
             CrcEligibility::LocalLoss => Some(&mut self.counters.local_loss),
@@ -238,6 +262,37 @@ impl LinkOuterLoop {
             .counters
             .failed
             .saturating_add(observation.crc_counts.failed as u64);
+        let recent = |at: Option<u64>| {
+            at.is_some_and(|at| observation.start.index.saturating_sub(at) <= LOAD_MEMORY_CHIPS)
+        };
+        let backlogged = self.last_scheduling.is_some_and(|(at, index)| {
+            observation.start.index.saturating_sub(at) <= SCHEDULING_MEMORY_CHIPS
+                && index > SMALL_BUFFER_INDEX
+        });
+        if let Some(bits) = observation.edch_transport_bits {
+            if !recent(self.last_active_dch) {
+                if bits <= SMALL_EDCH_TRANSPORT_BITS {
+                    if !recent(self.last_large_edch) {
+                        let target = if backlogged {
+                            self.settings.initial
+                        } else {
+                            self.settings.floor
+                        };
+                        self.target = PilotSirTarget::from_db(target)?;
+                    }
+                    return Ok(());
+                }
+                if !recent(self.last_large_edch) {
+                    self.target =
+                        PilotSirTarget::from_db(self.target.db().max(self.settings.initial))?;
+                }
+            }
+            if bits > SMALL_EDCH_TRANSPORT_BITS {
+                self.last_large_edch = Some(observation.start.index);
+            }
+        } else {
+            self.last_active_dch = Some(observation.start.index);
+        }
         let success_step =
             ERROR_STEP_DB * self.settings.target_bler / (1.0 - self.settings.target_bler);
         let delta = ERROR_STEP_DB * observation.crc_counts.failed as f64

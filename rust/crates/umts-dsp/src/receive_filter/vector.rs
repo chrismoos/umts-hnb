@@ -162,13 +162,25 @@ fn pack_four(values: &[Complex32]) -> f32x8 {
 // A block-local deinterleaved view avoids rebuilding interleaved SIMD vectors
 // for every tap and output. The persistent history and its reset rules stay shared.
 #[cfg(target_feature = "avx2")]
-pub(super) struct PlanarBlock {
-    real: [f32; SPECIALIZED_TAPS + super::INPUT_BLOCK_SAMPLES - 1],
-    imag: [f32; SPECIALIZED_TAPS + super::INPUT_BLOCK_SAMPLES - 1],
+pub(super) type PlanarBlock = PlanarBlockShape<
+    SPECIALIZED_TAPS,
+    { SPECIALIZED_TAPS + super::INPUT_BLOCK_SAMPLES - 1 },
+    { SPECIALIZED_TAPS + 7 },
+>;
+#[cfg(target_feature = "avx2")]
+pub(super) type PlanarBlock33 =
+    PlanarBlockShape<33, { 33 + super::INPUT_BLOCK_SAMPLES - 1 }, { 33 + 7 }>;
+
+#[cfg(target_feature = "avx2")]
+pub(super) struct PlanarBlockShape<const TAPS: usize, const HISTORY: usize, const WINDOW: usize> {
+    real: [f32; HISTORY],
+    imag: [f32; HISTORY],
 }
 
 #[cfg(target_feature = "avx2")]
-impl PlanarBlock {
+impl<const TAPS: usize, const HISTORY: usize, const WINDOW: usize>
+    PlanarBlockShape<TAPS, HISTORY, WINDOW>
+{
     pub(super) const OUTPUTS: usize = 8;
 
     pub(super) fn new(history: &[Complex32]) -> Self {
@@ -179,16 +191,16 @@ impl PlanarBlock {
     }
 
     pub(super) fn consecutive_eight(&self, start: usize, taps: &[f32]) -> [Complex32; 8] {
-        const WIDTH: usize = SPECIALIZED_TAPS + PlanarBlock::OUTPUTS - 1;
-        let real: &[f32; WIDTH] = self.real[start..start + WIDTH].try_into().unwrap();
-        let imag: &[f32; WIDTH] = self.imag[start..start + WIDTH].try_into().unwrap();
-        let taps: &[f32; SPECIALIZED_TAPS] = taps.try_into().unwrap();
+        let real: &[f32; WINDOW] = self.real[start..start + WINDOW].try_into().unwrap();
+        let imag: &[f32; WINDOW] = self.imag[start..start + WINDOW].try_into().unwrap();
+        let taps: &[f32; TAPS] = taps.try_into().unwrap();
+        let half = TAPS / 2;
         let mut real_sums = [f32x8::ZERO; COMPLEX_LANES];
         let mut imag_sums = [f32x8::ZERO; COMPLEX_LANES];
-        for group in 0..SPECIALIZED_GROUPS {
+        for group in 0..half / COMPLEX_LANES {
             for residue in 0..COMPLEX_LANES {
                 let tap = group * COMPLEX_LANES + residue;
-                let back = SPECIALIZED_TAPS - 1 - tap;
+                let back = TAPS - 1 - tap;
                 let weight = f32x8::splat(taps[tap]);
                 real_sums[residue] +=
                     (load_eight(&real[tap..]) + load_eight(&real[back..])) * weight;
@@ -196,11 +208,11 @@ impl PlanarBlock {
                     (load_eight(&imag[tap..]) + load_eight(&imag[back..])) * weight;
             }
         }
-        let weight = f32x8::splat(taps[SPECIALIZED_HALF]);
+        let weight = f32x8::splat(taps[half]);
         let real = ((real_sums[0] + real_sums[1]) + (real_sums[2] + real_sums[3]))
-            + load_eight(&real[SPECIALIZED_HALF..]) * weight;
+            + load_eight(&real[half..]) * weight;
         let imag = ((imag_sums[0] + imag_sums[1]) + (imag_sums[2] + imag_sums[3]))
-            + load_eight(&imag[SPECIALIZED_HALF..]) * weight;
+            + load_eight(&imag[half..]) * weight;
         let real = real.to_array();
         let imag = imag.to_array();
         std::array::from_fn(|index| {

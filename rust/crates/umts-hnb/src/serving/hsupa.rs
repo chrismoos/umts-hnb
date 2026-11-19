@@ -181,8 +181,18 @@ pub(super) fn validate(config: &Config) -> Result<()> {
         sum.checked_add(u64::try_from(bytes).ok()?)
     })
     .context("HSUPA per-UE memory limits overflow")?;
+    let shared_decoder_bytes = if config.hspa.uplink.enabled {
+        u64::try_from(
+            crate::hsupa_rx::decode::Worker::required_storage_bytes(config.runtime.maximum_ues)
+                .context("HSUPA decoder storage overflow")?,
+        )
+        .context("HSUPA decoder storage overflow")?
+    } else {
+        0
+    };
     let cell = per_ue
         .checked_mul(u64::from(config.runtime.maximum_ues))
+        .and_then(|bytes| bytes.checked_add(shared_decoder_bytes))
         .context("HSUPA cell memory limits overflow")?;
     ensure!(
         cell <= settings.maximum_cell_receive_bytes,

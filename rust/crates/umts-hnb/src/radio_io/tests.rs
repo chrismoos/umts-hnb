@@ -574,13 +574,14 @@ impl RadioTx for AppliedRateTx {
 struct AppliedRateRx {
     inner: ScriptedRx,
     rate_hz: f64,
+    tick_rate: u64,
 }
 impl RadioRx for AppliedRateRx {
     fn rx_sample_rate_hz(&self) -> f64 {
         self.rate_hz
     }
     fn tick_rate(&self) -> u64 {
-        self.inner.tick_rate()
+        self.tick_rate
     }
     fn get_hardware_time(&self) -> Result<u64, Error> {
         self.inner.get_hardware_time()
@@ -608,6 +609,7 @@ fn applied_tx(rate_hz: f64) -> Box<dyn RadioTx> {
 fn applied_rx(rate_hz: f64) -> Box<dyn RadioRx> {
     Box::new(AppliedRateRx {
         rate_hz,
+        tick_rate: 30_720_000,
         inner: ScriptedRx {
             outcomes: VecDeque::new(),
             active: false,
@@ -732,6 +734,7 @@ fn quantized_rx_timestamps_preserve_one_sample_grid_across_cell_origin_rounding(
     ];
     let rx = AppliedRateRx {
         rate_hz: RATE_HZ,
+        tick_rate: 30_720_000,
         inner: ScriptedRx {
             active: false,
             outcomes: ticks
@@ -802,6 +805,7 @@ fn fractional_rx_metadata_retains_long_horizon_continuity_and_real_gaps() {
         };
         let rx = AppliedRateRx {
             rate_hz,
+            tick_rate: 30_720_000,
             inner: ScriptedRx {
                 active: false,
                 outcomes: vec![
@@ -839,6 +843,73 @@ fn fractional_rx_metadata_retains_long_horizon_continuity_and_real_gaps() {
         assert_eq!(receiver.counters().discontinuities, 1);
         receiver.stop().unwrap();
     }
+}
+
+#[test]
+fn nanosecond_rx_timestamps_reset_the_filter_once_per_real_gap() {
+    const RATE: u64 = 7_680_000;
+    const TICKS: u64 = 1_000_000_000;
+    const BLOCK: usize = 5120;
+    const GAP: u64 = 128;
+    let resumed = BLOCK as u64 + GAP;
+    let starts = std::iter::once(0)
+        .chain((0..6).map(|index| resumed + index * BLOCK as u64))
+        .chain(std::iter::once(resumed + 6 * BLOCK as u64 + GAP));
+    let outcomes = starts
+        .enumerate()
+        .map(|(index, sample)| {
+            let tick = if index == 0 {
+                0
+            } else {
+                u64::try_from(
+                    ((2 * u128::from(sample) + 1) * u128::from(TICKS) + u128::from(RATE))
+                        / (2 * u128::from(RATE)),
+                )
+                .unwrap()
+            };
+            Ok((
+                vec![Complex32::new(0.1, 0.2); BLOCK],
+                RxReadResult {
+                    samples_read: BLOCK,
+                    time_ticks: tick,
+                    overflow: index == 1,
+                },
+            ))
+        })
+        .collect();
+    let rx = AppliedRateRx {
+        inner: ScriptedRx {
+            outcomes,
+            active: false,
+        },
+        rate_hz: RATE as f64,
+        tick_rate: TICKS,
+    };
+    let origin = AirClockOrigin {
+        chip: at(0),
+        chip_rate: SampleRate::new(CHIPS_PER_SECOND, 1).unwrap(),
+        tick: 0,
+        tick_rate: NonZeroU64::new(TICKS).unwrap(),
+    };
+    let mut settings = fractional_rx_settings();
+    settings.maximum_samples = count(BLOCK);
+    let mut receiver = TimedRx::new(Box::new(rx), origin, settings).unwrap();
+    receiver.start(None).unwrap();
+    for index in 0..8 {
+        let block = receiver.read_matched().unwrap().unwrap();
+        let generation = match index {
+            0 => 1,
+            1..=6 => 2,
+            _ => 3,
+        };
+        assert_eq!(block.full.generation, generation);
+        assert_eq!(block.full.discontinuity, index == 1 || index == 7);
+    }
+    let counters = receiver.counters();
+    assert_eq!(counters.discontinuities, 2);
+    assert_eq!(counters.reported_overflows, 1);
+    assert_eq!(counters.missing_samples, 2 * GAP);
+    receiver.stop().unwrap();
 }
 
 struct RateRx {

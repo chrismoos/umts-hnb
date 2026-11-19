@@ -46,7 +46,7 @@ fn default_plan_preserves_configured_capacity_and_consistent_fixed_budgets() {
     assert!(required_shared(&config) <= plan.receive.maximum_shared_bytes);
     assert_eq!(
         plan.receive.shard.resources.physical_sample_bytes,
-        64 * 1024 * 1024
+        512 * 1024 * 1024
     );
     assert_eq!(plan.receive.shard.resources.coded_bits, 8 * 1024 * 1024);
     assert_eq!(plan.receive.shard.resources.output_bytes, 8 * 1024 * 1024);

@@ -549,6 +549,20 @@ impl DedicatedChipReceiver {
                     start: decoded.start,
                     control: decoded.control,
                     presence_log_likelihood,
+                    transport_bits: decoded.transport_bits,
+                    scheduling: decoded
+                        .received
+                        .payload
+                        .filter(|payload| {
+                            decoded.control.information.format.value() == 0 && payload.len() == 18
+                        })
+                        .and_then(|payload| {
+                            umts_mac::hsupa::scheduling::SchedulingInformation::from_word(
+                                payload
+                                    .iter()
+                                    .fold(0u32, |word, bit| (word << 1) | *bit as u32),
+                            )
+                        }),
                     feedback: decoded.received.feedback,
                     outcome: decoded.received.outcome,
                 });

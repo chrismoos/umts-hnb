@@ -191,6 +191,51 @@ fn receive_diagnostics_are_single_flight_and_return_exact_active_identity() {
 }
 
 #[test]
+fn management_reads_the_latest_status_after_the_link_monitor_consumes_the_reply() {
+    let (mut runtime, mut controller, identity, _) = fixture();
+    controller.visit_receive_diagnostics(|_, _| panic!("no completed observation"));
+    controller.service_receive_diagnostics(|_, _| panic!("reply not ready"));
+    runtime.service(|_, result| {
+        result.unwrap();
+    });
+    let mut monitored = None;
+    assert_eq!(
+        controller.service_receive_diagnostics(|id, status| {
+            monitored = Some((id, status.next_frame));
+        }),
+        1
+    );
+    assert_eq!(monitored.unwrap().0, identity);
+    for _ in 0..2 {
+        let mut reported = None;
+        controller.visit_receive_diagnostics(|id, status| {
+            reported = Some((id, status.next_frame));
+        });
+        assert_eq!(reported, monitored);
+    }
+}
+
+#[test]
+fn cached_receive_status_is_hidden_as_soon_as_its_owner_starts_retiring() {
+    let (mut runtime, mut controller, identity, _) = fixture();
+    controller.service_receive_diagnostics(|_, _| panic!("reply not ready"));
+    runtime.service(|_, result| {
+        result.unwrap();
+    });
+    assert_eq!(controller.service_receive_diagnostics(|_, _| {}), 1);
+    let mut active = 0;
+    controller.visit_receive_diagnostics(|_, _| active += 1);
+    assert_eq!(active, 1);
+    controller.remove(identity).unwrap();
+    controller.visit_receive_diagnostics(|_, _| panic!("retiring receiver"));
+    runtime.service(|_, result| {
+        result.unwrap();
+    });
+    controller.poll_receipts();
+    controller.visit_receive_diagnostics(|_, _| panic!("retired receiver"));
+}
+
+#[test]
 fn late_diagnostic_reply_does_not_report_a_retired_owner_as_active() {
     let (mut runtime, mut controller, identity, _) = fixture();
     controller.service_receive_diagnostics(|_, _| panic!("not serviced"));

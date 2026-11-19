@@ -461,6 +461,10 @@ impl UplinkSlot<'_> {
         self.receiver.format.pilots().bits()
     }
 
+    pub fn frame_slot(&self) -> usize {
+        self.slot
+    }
+
     pub fn code(&self) -> &Arc<UplinkDpchCode> {
         &self.receiver.code
     }

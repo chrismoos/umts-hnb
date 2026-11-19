@@ -513,9 +513,103 @@ impl<T: Transport> CommonController<T> {
                 return Err(error);
             }
         }
+        let edch = sessions
+            .entries
+            .iter()
+            .flatten()
+            .filter(|session| {
+                matches!(
+                    session.phase(),
+                    Phase::Accepted | Phase::AwaitingCommandAck | Phase::Active | Phase::Cancelling
+                )
+            })
+            .filter(|session| !session.carries_voice())
+            .map(|session| session.identity().ue.slot)
+            .filter(|slot| *slot < 64)
+            .fold(0u64, |slots, slot| slots | (1 << slot));
+        crate::dedicated_rx::set_edch_slots(edch);
+        // A handset no longer on HSUPA must not be sent a process allocation left from before.
+        crate::signalling::retain_process_allocations(|key| {
+            sessions
+                .entries
+                .iter()
+                .flatten()
+                .any(|session| session.phase() == Phase::Active && session.identity().ue == key)
+        });
+        let voice = sessions
+            .entries
+            .iter()
+            .flatten()
+            .any(|session| session.phase() == Phase::Active && session.carries_voice());
+        let mut wanting: Vec<u32> = sessions
+            .entries
+            .iter()
+            .flatten()
+            .filter(|session| {
+                session.phase() == Phase::Active && (voice || session.uplink_demand(now))
+            })
+            .map(|session| session.identity().ue.slot)
+            .collect();
+        wanting.sort_unstable();
+        let settling = {
+            let mut seen = RECENTLY_ACTIVE
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            for session in sessions.entries.iter().flatten() {
+                let slot = session.identity().ue.slot as usize;
+                if session.phase() == Phase::Active && slot < seen.len() {
+                    seen[slot] = Some(now);
+                }
+            }
+            seen.iter().flatten().any(|last| {
+                last.epoch == now.epoch
+                    && last.index != now.index
+                    && now.index.saturating_sub(last.index) < SETTLE_CHIPS
+            })
+        };
+        let allocations = {
+            let mut shares = SHARES.lock().unwrap_or_else(|error| error.into_inner());
+            let sharing: &[u32] = if wanting.len() < 2 { &[] } else { &wanting };
+            let due = shares.1.is_none_or(|at| {
+                at.epoch != now.epoch || now.index.saturating_sub(at.index) >= SHARE_STEP_CHIPS
+            });
+            if !shares.0.iter().map(|(slot, _)| slot).eq(sharing) {
+                *shares = (process_shares(sharing), Some(now));
+            } else if due && !settling {
+                let uses: Vec<ShareUse> = sessions
+                    .entries
+                    .iter()
+                    .flatten()
+                    .filter(|session| session.phase() == Phase::Active)
+                    .filter_map(|session| {
+                        let slot = session.identity().ue.slot;
+                        let (backlog, used, most, applied) = session.uplink_use()?;
+                        let (_, share) = shares.0.iter().find(|(other, _)| *other == slot)?;
+                        (*share == applied).then_some(ShareUse {
+                            slot,
+                            backlog,
+                            used: used?,
+                            most,
+                        })
+                    })
+                    .collect();
+                if uses.len() == shares.0.len() && shift_share(&mut shares.0, &uses) {
+                    shares.1 = Some(now);
+                }
+            }
+            shares.0.clone()
+        };
         for session in
             visits::occupied(&mut sessions.entries, &mut sessions.cursor, sessions.budget)
         {
+            let slot = session.identity().ue.slot;
+            let processes = allocations
+                .iter()
+                .find(|(wanting, _)| *wanting == slot)
+                .map_or(0xff, |(_, processes)| *processes);
+            if session.phase() == Phase::Active && !settling {
+                session.allocate_uplink(now, processes);
+            }
             report.visited += 1;
             let result: anyhow::Result<()> = (|| {
                 if matches!(
@@ -754,5 +848,182 @@ impl<T: Transport> CommonController<T> {
                 Ok(false)
             }
         }
+    }
+}
+
+pub(crate) fn process_shares(wanting: &[u32]) -> Vec<(u32, u8)> {
+    if wanting.len() < 2 {
+        return Vec::new();
+    }
+    let mut shares: Vec<(u32, u8)> = wanting.iter().map(|slot| (*slot, 0u8)).collect();
+    let count = shares.len();
+    for place in 0..count.max(8) {
+        shares[place % count].1 |= 1 << (place % 8);
+    }
+    shares
+}
+
+pub(crate) struct ShareUse {
+    pub slot: u32,
+    pub backlog: bool,
+    pub used: f64,
+    pub most: f64,
+}
+
+const FULL_USE: f64 = 0.8;
+const LIGHT_USE: f64 = 0.4;
+
+const TARGET_USE: f64 = 0.2;
+// One process starves the acknowledgements of a handset that is downloading.
+const LIGHT_PROCESSES: u32 = 2;
+
+// A handset leaving its share idle keeps the processes that hold its traffic at the target use
+// and the rest go to one filling its own. One process moves back per call once it fills what it has.
+pub(crate) fn shift_share(shares: &mut [(u32, u8)], uses: &[ShareUse]) -> bool {
+    let densest = uses.iter().map(|entry| entry.most).fold(0.0, f64::max);
+    if densest <= 0.0 {
+        return false;
+    }
+    let count = |slot: u32| {
+        shares
+            .iter()
+            .find(|(other, _)| *other == slot)
+            .map_or(0, |(_, processes)| processes.count_ones())
+    };
+    let full = |entry: &&ShareUse| entry.backlog || entry.used >= FULL_USE * densest;
+    let light = |entry: &&ShareUse| !entry.backlog && entry.used < LIGHT_USE * densest;
+    let Some(receiver) = uses
+        .iter()
+        .filter(full)
+        .min_by_key(|entry| count(entry.slot))
+    else {
+        return false;
+    };
+    let idle = uses
+        .iter()
+        .filter(light)
+        .filter(|entry| count(entry.slot) > LIGHT_PROCESSES)
+        .max_by_key(|entry| count(entry.slot));
+    let largest = uses
+        .iter()
+        .max_by_key(|entry| count(entry.slot))
+        .filter(|entry| count(entry.slot) >= count(receiver.slot) + 2);
+    let Some(donor) = idle.or(largest).filter(|entry| entry.slot != receiver.slot) else {
+        return false;
+    };
+    let held = count(donor.slot);
+    let keep = if idle.is_some() {
+        ((f64::from(held) * donor.used / (TARGET_USE * densest)).ceil() as u32)
+            .clamp(LIGHT_PROCESSES, held)
+    } else {
+        held - 1
+    };
+    let mut process = 0u8;
+    if let Some((_, processes)) = shares.iter().find(|(slot, _)| *slot == donor.slot) {
+        let mut remaining = *processes;
+        for _ in keep..held {
+            process |= remaining & remaining.wrapping_neg();
+            remaining &= remaining - 1;
+        }
+    }
+    if process == 0 {
+        return false;
+    }
+    let (donor, receiver) = (donor.slot, receiver.slot);
+    for (slot, processes) in shares.iter_mut() {
+        if *slot == donor {
+            *processes &= !process;
+        } else if *slot == receiver {
+            *processes |= process;
+        }
+    }
+    true
+}
+
+type Shares = (Vec<(u32, u8)>, Option<ChipInstant>);
+static SHARES: std::sync::Mutex<Shares> = std::sync::Mutex::new((Vec::new(), None));
+const SHARE_STEP_CHIPS: u64 = 3 * umts_types::time::CHIPS_PER_SECOND;
+
+static RECENTLY_ACTIVE: std::sync::Mutex<[Option<ChipInstant>; 64]> =
+    std::sync::Mutex::new([None; 64]);
+const SETTLE_CHIPS: u64 = 6 * umts_types::time::CHIPS_PER_SECOND;
+
+#[cfg(test)]
+mod share_tests {
+    use super::{ShareUse, process_shares, shift_share};
+
+    fn entry(slot: u32, backlog: bool, used: f64) -> ShareUse {
+        ShareUse {
+            slot,
+            backlog,
+            used,
+            most: used.max(if slot == 0 { 9000.0 } else { 0.0 }),
+        }
+    }
+
+    #[test]
+    fn an_idle_share_moves_to_the_handset_filling_its_own_and_back() {
+        let mut shares = process_shares(&[0, 1]);
+        let lopsided = [entry(0, true, 9000.0), entry(1, false, 900.0)];
+        assert!(shift_share(&mut shares, &lopsided));
+        assert_eq!((shares[0].1.count_ones(), shares[1].1.count_ones()), (6, 2));
+        assert_eq!(
+            (shares[0].1 | shares[1].1, shares[0].1 & shares[1].1),
+            (0xff, 0)
+        );
+        let mut partial = process_shares(&[0, 1]);
+        assert!(shift_share(
+            &mut partial,
+            &[entry(0, true, 9000.0), entry(1, false, 1200.0)]
+        ));
+        assert_eq!(partial[1].1.count_ones(), 3);
+        assert!(!shift_share(&mut shares, &lopsided));
+        let mut depressed = process_shares(&[0, 1]);
+        assert!(shift_share(
+            &mut depressed,
+            &[entry(0, true, 3000.0), entry(1, false, 1200.0)]
+        ));
+        assert_eq!(depressed[1].1.count_ones(), 3);
+        let steady = [entry(0, true, 9000.0), entry(1, false, 5000.0)];
+        assert!(!shift_share(&mut shares, &steady));
+        let both = [entry(0, true, 9000.0), entry(1, true, 9000.0)];
+        for expected in [(5, 3), (4, 4)] {
+            assert!(shift_share(&mut shares, &both));
+            assert_eq!(
+                (shares[0].1.count_ones(), shares[1].1.count_ones()),
+                expected
+            );
+        }
+        assert!(!shift_share(&mut shares, &both));
+        assert!(!shift_share(
+            &mut shares,
+            &[entry(0, false, 0.0), entry(1, false, 0.0)]
+        ));
+    }
+
+    #[test]
+    fn processes_divide_among_any_number_of_handsets() {
+        assert!(process_shares(&[]).is_empty());
+        assert!(process_shares(&[3]).is_empty());
+        assert_eq!(process_shares(&[0, 1]), [(0, 0x55), (1, 0xaa)]);
+        assert_eq!(
+            process_shares(&[2, 5, 9]),
+            [(2, 0x49), (5, 0x92), (9, 0x24)]
+        );
+        for count in 2..=8u32 {
+            let wanting: Vec<u32> = (0..count).collect();
+            let shares = process_shares(&wanting);
+            let mut used = 0u8;
+            for (_, processes) in &shares {
+                assert_eq!(used & processes, 0);
+                used |= processes;
+            }
+            assert_eq!(used, 0xff);
+            let sizes: Vec<u32> = shares.iter().map(|share| share.1.count_ones()).collect();
+            assert!(sizes.iter().max().unwrap() - sizes.iter().min().unwrap() <= 1);
+        }
+        let many: Vec<u32> = (0..11).collect();
+        let shares = process_shares(&many);
+        assert!(shares.iter().all(|share| share.1.count_ones() == 1));
     }
 }

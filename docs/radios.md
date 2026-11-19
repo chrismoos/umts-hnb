@@ -17,7 +17,7 @@ radio:
   rx_antenna: RX2
   uarfcn_dl: 4400
   uarfcn_ul: 4175
-  tx_gain_db: 78.0
+  tx_gain_db: 75.0
   rx_gain_db: 30.0
   rx_delay_samples: 95.0
 ```

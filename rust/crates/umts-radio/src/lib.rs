@@ -45,6 +45,7 @@ pub struct RxTimeline {
     rate: SampleRate,
     tick_rate: NonZeroU64,
     segment: Option<SampleClock>,
+    initial_segment: Option<SampleClock>,
     next_sample: u64,
     pending_overflow: bool,
     overlaps: RxOverlapCounters,
@@ -57,6 +58,7 @@ impl RxTimeline {
             rate: SampleRate::from_hz(rx.rx_sample_rate_hz())?,
             tick_rate: NonZeroU64::new(rx.tick_rate()).ok_or(TimeError::InvalidRate)?,
             segment: None,
+            initial_segment: None,
             next_sample: 0,
             pending_overflow: false,
             overlaps: RxOverlapCounters::default(),
@@ -86,7 +88,25 @@ impl RxTimeline {
         let tick_delta =
             expected.map_or(0, |tick| i128::from(result.time_ticks) - i128::from(tick));
         let first = match self.segment {
-            Some(clock) => clock.sample_at_tick(result.time_ticks)?,
+            Some(clock) => match clock.sample_at_tick(result.time_ticks) {
+                Ok(first) => first,
+                Err(TimeError::BeforeOrigin) => {
+                    let first = self
+                        .initial_segment
+                        .ok_or(TimeError::BeforeOrigin)?
+                        .sample_at_tick(result.time_ticks)?;
+                    let end = first
+                        .index
+                        .checked_add(result.samples_read as u64)
+                        .ok_or(TimeError::Overflow)?;
+                    // An older grid may identify duplicates, but must not place new samples.
+                    if end > self.next_sample {
+                        return Err(TimeError::BeforeOrigin);
+                    }
+                    first
+                }
+                Err(error) => return Err(error),
+            },
             None => expected_first,
         };
         let discarded_prefix = usize::try_from(
@@ -121,13 +141,10 @@ impl RxTimeline {
                 reported_overflow: self.pending_overflow,
                 tick_delta,
             });
-        if self.segment.is_none() {
-            self.segment = Some(SampleClock::new(
-                first,
-                result.time_ticks,
-                self.rate,
-                self.tick_rate,
-            ));
+        if self.segment.is_none() || discontinuity.is_some() {
+            let segment = SampleClock::new(first, result.time_ticks, self.rate, self.tick_rate);
+            self.initial_segment.get_or_insert(segment);
+            self.segment = Some(segment);
         }
         self.next_sample = next_sample;
         self.pending_overflow = false;
@@ -152,6 +169,87 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn a_gap_establishes_one_quantized_sample_grid_without_repeated_discontinuities() {
+        const SAMPLE_RATE: u64 = 7_680_000;
+        const TICK_RATE: u64 = 1_000_000_000;
+        const BLOCK: usize = 5120;
+        const GAP: u64 = 128;
+        let resumed = BLOCK as u64 + GAP;
+        let tick = |sample: u64| {
+            u64::try_from(
+                ((2 * u128::from(sample) + 1) * u128::from(TICK_RATE) + u128::from(SAMPLE_RATE))
+                    / (2 * u128::from(SAMPLE_RATE)),
+            )
+            .unwrap()
+        };
+        for reported_overflow in [false, true] {
+            let (mut radio, _) = MemoryRadio::new(1);
+            radio
+                .setup_rx(0, "", SAMPLE_RATE as f64, 5_000_000.0, None)
+                .unwrap();
+            let (_, rx) = Box::new(radio).split().unwrap();
+            let mut timeline =
+                RxTimeline::from_hal(RadioEpoch::new(NonZeroU64::MIN), &*rx.unwrap()).unwrap();
+            timeline
+                .observe(sdr_hal::RxReadResult {
+                    samples_read: BLOCK,
+                    time_ticks: 0,
+                    overflow: false,
+                })
+                .unwrap();
+            let first = timeline
+                .observe(sdr_hal::RxReadResult {
+                    samples_read: BLOCK,
+                    time_ticks: tick(resumed),
+                    overflow: reported_overflow,
+                })
+                .unwrap()
+                .unwrap();
+            assert_eq!(first.first.index, resumed);
+            assert_eq!(
+                first.discontinuity.unwrap().reported_overflow,
+                reported_overflow
+            );
+            for index in 1..6 {
+                let next = timeline
+                    .observe(sdr_hal::RxReadResult {
+                        samples_read: BLOCK,
+                        time_ticks: tick(resumed + index * BLOCK as u64),
+                        overflow: false,
+                    })
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(next.first.index, resumed + index * BLOCK as u64);
+                assert_eq!(next.discarded_prefix, 0);
+                assert_eq!(next.discontinuity, None);
+            }
+            assert!(
+                timeline
+                    .observe(sdr_hal::RxReadResult {
+                        samples_read: BLOCK,
+                        time_ticks: 0,
+                        overflow: false,
+                    })
+                    .unwrap()
+                    .is_none()
+            );
+            let expected = resumed + 6 * BLOCK as u64;
+            let real_gap = timeline
+                .observe(sdr_hal::RxReadResult {
+                    samples_read: BLOCK,
+                    time_ticks: tick(expected + GAP),
+                    overflow: false,
+                })
+                .unwrap()
+                .unwrap();
+            assert_eq!(real_gap.first.index - expected, GAP);
+            assert!(real_gap.discontinuity.is_some());
+            assert_eq!(timeline.overlaps().blocks, 1);
+            assert_eq!(timeline.overlaps().samples, BLOCK as u64);
+        }
+    }
 
     #[test]
     fn hal_partial_reads_preserve_valid_prefix_clock_and_gap_evidence() {

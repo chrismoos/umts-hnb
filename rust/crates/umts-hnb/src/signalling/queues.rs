@@ -350,7 +350,11 @@ impl CoreOutbox {
             entry.request.key() == event.connection.key.ue
                 && umts_types::CnDomain::from(entry.request.domain()) == event.connection.key.domain
         }) {
-            return Err(SignallingError::Capacity);
+            // A reopening message waits for the release. One for the released connection has no destination.
+            return match event.kind {
+                CoreNasKind::Initial => Err(SignallingError::Capacity),
+                CoreNasKind::Direct => Ok(()),
+            };
         }
         if self.length == self.slots.len() {
             return Err(SignallingError::Capacity);

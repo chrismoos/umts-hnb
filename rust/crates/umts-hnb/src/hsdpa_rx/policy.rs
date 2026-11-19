@@ -84,6 +84,17 @@ impl EvidenceLimits {
 
     fn rejection<T>(&self, observation: &Observation<T>) -> Option<AckRejection> {
         let evidence = &observation.evidence;
+        let decisive = evidence.candidate.is_some()
+            && evidence.normalized_correlation.is_finite()
+            && evidence.normalized_margin.is_finite()
+            && evidence.mean_soft_power.is_finite()
+            && evidence.normalized_correlation
+                >= DECISIVE_CORRELATION.max(self.minimum_correlation)
+            && evidence.normalized_margin >= self.minimum_margin
+            && evidence.mean_soft_power >= self.minimum_relative_soft_power;
+        if decisive {
+            return None;
+        }
         if ![
             evidence.normalized_correlation,
             evidence.normalized_margin,
@@ -114,6 +125,8 @@ impl EvidenceLimits {
         }
     }
 }
+
+const DECISIVE_CORRELATION: f64 = 0.7;
 
 #[derive(Clone, Copy, Debug)]
 pub struct FeedbackPolicy {
@@ -188,7 +201,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn strong_word_is_not_ack_without_pilot_and_relative_power_evidence() {
+    fn word_needs_relative_power_and_either_decisive_match_or_pilot_evidence() {
         let limits = EvidenceLimits::new(0.8, 0.2, 0.7, 0.1, 0.01).unwrap();
         let policy = FeedbackPolicy {
             acknowledgement: limits,
@@ -209,15 +222,53 @@ mod tests {
             policy.classify_ack_with_reason(&good),
             (Feedback::Ack, None)
         );
-        for (bad, reason) in [
+        for disturbed in [
             Observation {
                 minimum_pilot_fraction: 0.1,
                 ..good
             },
             Observation {
-                mean_relative_pilot_disturbance: 1.0,
+                mean_relative_pilot_disturbance: f64::INFINITY,
                 ..good
             },
+        ] {
+            assert_eq!(policy.classify_ack(&disturbed), Feedback::Ack);
+        }
+        let lenient = EvidenceLimits::new(0.5, 0.2, 0.7, 0.1, 0.01).unwrap();
+        let lenient = FeedbackPolicy {
+            acknowledgement: lenient,
+            cqi: lenient,
+        };
+        let passable = Observation {
+            evidence: FeedbackEvidence {
+                normalized_correlation: 0.65,
+                ..good.evidence
+            },
+            ..good
+        };
+        assert_eq!(lenient.classify_ack(&passable), Feedback::Ack);
+        for (bad, reason) in [
+            (
+                Observation {
+                    minimum_pilot_fraction: 0.1,
+                    ..passable
+                },
+                AckRejection::PilotFraction,
+            ),
+            (
+                Observation {
+                    mean_relative_pilot_disturbance: 1.0,
+                    ..passable
+                },
+                AckRejection::PilotDisturbance,
+            ),
+        ] {
+            assert_eq!(
+                lenient.classify_ack_with_reason(&bad),
+                (Feedback::Dtx, Some(reason))
+            );
+        }
+        for (bad, reason) in [
             Observation {
                 evidence: FeedbackEvidence {
                     mean_soft_power: 0.0,
@@ -242,8 +293,6 @@ mod tests {
         ]
         .into_iter()
         .zip([
-            AckRejection::PilotFraction,
-            AckRejection::PilotDisturbance,
             AckRejection::RelativePower,
             AckRejection::NonFinite,
             AckRejection::NonAckWord,

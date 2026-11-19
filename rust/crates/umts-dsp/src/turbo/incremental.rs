@@ -201,18 +201,18 @@ impl TurboDecoder {
                         };
                         continue;
                     }
+                    let systematic = &self.systematic[constituent][..length + TAIL_STEPS];
+                    let parity = &self.parity[constituent][..length + TAIL_STEPS];
+                    let prior = &self.prior[constituent][..length];
+                    let forward = &mut self.forward[..length + TAIL_STEPS + 1];
                     while *index < length + TAIL_STEPS {
                         if !work.consume(STATES) {
                             break 'decode;
                         }
-                        let evidence = self.systematic[constituent][*index]
-                            + self.prior[constituent]
-                                .get(*index)
-                                .filter(|_| *index < length)
-                                .copied()
-                                .unwrap_or(0.0);
-                        let branches = branch_metrics(evidence, self.parity[constituent][*index]);
-                        let row = &self.forward[*index];
+                        let evidence =
+                            systematic[*index] + prior.get(*index).copied().unwrap_or(0.0);
+                        let branches = branch_metrics(evidence, parity[*index]);
+                        let row = &forward[*index];
                         let mut next = forward_step(row, &branches);
                         let completed = *index + 1;
                         if completed.is_multiple_of(NORMALIZATION_INTERVAL)
@@ -220,7 +220,7 @@ impl TurboDecoder {
                         {
                             normalize(&mut next);
                         }
-                        self.forward[*index + 1] = next;
+                        forward[*index + 1] = next;
                         *index += 1;
                     }
                 }
@@ -229,21 +229,20 @@ impl TurboDecoder {
                         progress.phase = Phase::Exchange(0);
                         continue;
                     }
+                    let systematic = &self.systematic[constituent][..length + TAIL_STEPS];
+                    let parity = &self.parity[constituent][..length + TAIL_STEPS];
+                    let prior = &self.prior[constituent][..length];
+                    let forward = &mut self.forward[..length + TAIL_STEPS + 1];
                     while *next != 0 {
                         if !work.consume(STATES) {
                             break 'decode;
                         }
                         *next -= 1;
                         let index = *next;
-                        let evidence = self.systematic[constituent][index]
-                            + self.prior[constituent]
-                                .get(index)
-                                .filter(|_| index < length)
-                                .copied()
-                                .unwrap_or(0.0);
-                        let branches = branch_metrics(evidence, self.parity[constituent][index]);
+                        let evidence = systematic[index] + prior.get(index).copied().unwrap_or(0.0);
+                        let branches = branch_metrics(evidence, parity[index]);
                         let (mut previous, best) =
-                            backward_step(metrics, &self.forward[index], &branches);
+                            backward_step(metrics, &forward[index], &branches);
                         if index < length {
                             self.posterior[constituent][index] = best[0] - best[1];
                         }

@@ -29,9 +29,79 @@ pub struct Reports {
     pub measurement_control_configured: bool,
     pub measurement_control_failures: u64,
     pub unsupported_control_count: u64,
+    process_allocation: Option<(u8, usize)>,
     requested: Option<umts_rrc::establishment::TransactionId>,
     bler_requested: Option<umts_rrc::establishment::TransactionId>,
     latest_announced_layout: [Option<layout::TransportDescription>; layout::MAX_TRANSPORTS],
+}
+
+static PROCESS_ALLOCATIONS: std::sync::Mutex<
+    Vec<(
+        umts_types::UeKey,
+        u8,
+        std::sync::Arc<umts_rrc::hsupa::UplinkActivation>,
+    )>,
+> = std::sync::Mutex::new(Vec::new());
+
+pub(crate) fn desire_process_allocation(
+    key: umts_types::UeKey,
+    processes: u8,
+    configuration: &std::sync::Arc<umts_rrc::hsupa::UplinkActivation>,
+) {
+    let mut all = PROCESS_ALLOCATIONS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    all.retain(|(other, _, _)| other.epoch == key.epoch && *other != key);
+    all.push((key, processes, std::sync::Arc::clone(configuration)));
+    if all.len() > 64 {
+        all.remove(0);
+    }
+}
+
+pub(crate) fn retain_process_allocations(active: impl Fn(umts_types::UeKey) -> bool) {
+    PROCESS_ALLOCATIONS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .retain(|(key, _, _)| active(*key));
+}
+
+pub(super) fn request_process_allocation(
+    context: &mut super::Context,
+    key: umts_types::UeKey,
+) -> Result<(), SignallingError> {
+    let desired = PROCESS_ALLOCATIONS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|(other, _, _)| *other == key)
+        .map(|(_, processes, configuration)| (*processes, std::sync::Arc::clone(configuration)));
+    let Some((processes, configuration)) = desired else {
+        return Ok(());
+    };
+    let setup = std::sync::Arc::as_ptr(&configuration) as usize;
+    let current = context
+        .reports
+        .process_allocation
+        .filter(|(_, sent)| *sent == setup)
+        .map_or(0xff, |(processes, _)| processes);
+    if current == processes || !can_publish(context, key, SignallingBearer::ControlAm)? {
+        return Ok(());
+    }
+    let kind = super::transactions::MessageType::PhysicalChannelReconfiguration;
+    let transaction = context.transactions.next(kind);
+    let message = configuration
+        .process_allocation(transaction, processes)
+        .map_err(|_| SignallingError::Mapping)?;
+    publish(context, key, SignallingBearer::ControlAm, &message)?;
+    context.transactions.admitted(kind, transaction);
+    context.reports.process_allocation = Some((processes, setup));
+    tracing::info!(
+        "HARQ process allocation sent: slot={} generation={} processes={processes:#04x} transaction={}",
+        key.slot,
+        key.generation,
+        transaction.get(),
+    );
+    Ok(())
 }
 
 pub(super) fn request_secondary_cpich(

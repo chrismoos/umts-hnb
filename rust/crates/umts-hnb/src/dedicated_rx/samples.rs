@@ -1476,13 +1476,11 @@ impl DedicatedSampleReceiver {
                 self.confirmed_carrier = CarrierOffsetHz::new(carrier.applied_hz)?;
             }
             use crate::dedicated_tx::{DownlinkCommand, DownlinkControl};
-            // TS 25.214 5.2.1.2.2: TPCest is 0 or 1 for every transmitted slot, so the sign of
-            // the TPC correlation decides even when the pilot is below the coherence floor. A
-            // tie or an unusable correlation estimates 1, which keeps the link rather than
-            // starving it. Only a slot with no finite observation at all leaves the power.
+            // TS 25.214 5.2.1.2.2: TPCest is 0 or 1 for every slot, so a slot with an unusable or
+            // weakly correlated pilot estimates 1.
             let command = if !control.tpc.is_finite() {
                 DownlinkCommand::Hold
-            } else if control.tpc <= 0.0 {
+            } else if control.tpc <= 0.0 || !quality::tpc_pilot_usable(control.pilot) {
                 DownlinkCommand::Up
             } else {
                 DownlinkCommand::Down

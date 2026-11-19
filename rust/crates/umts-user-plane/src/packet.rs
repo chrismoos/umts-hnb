@@ -254,6 +254,7 @@ pub struct Update {
     pub next_uplink: Option<u16>,
     pub next_downlink: Option<u16>,
 }
+const RELEASED_TUNNEL_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Counters {
     pub malformed: u64,
@@ -302,6 +303,7 @@ pub struct PacketPlane<T: Datagrams> {
     signalling_sequence: u16,
     paths: Vec<Path>,
     released_volumes: Vec<(RouteKey, u64)>,
+    released_tunnels: Vec<(Teid, std::time::Duration)>,
     started: std::time::Instant,
     test_time: Option<std::time::Duration>,
 }
@@ -398,6 +400,7 @@ impl<T: Datagrams> PacketPlane<T> {
             signalling_sequence: 0,
             paths: Vec::with_capacity(limits.routes.get()),
             released_volumes: Vec::with_capacity(limits.routes.get()),
+            released_tunnels: Vec::with_capacity(limits.routes.get()),
             started: std::time::Instant::now(),
             test_time: None,
         })
@@ -673,6 +676,10 @@ impl<T: Datagrams> PacketPlane<T> {
             .remove(&handle.local_teid)
             .expect("validated handle");
         let route = self.routes[index].take().expect("registered route");
+        if self.released_tunnels.len() == self.released_tunnels.capacity() {
+            self.released_tunnels.remove(0);
+        }
+        self.released_tunnels.push((handle.local_teid, self.now()));
         self.counters.retired_packets = self
             .counters
             .retired_packets
@@ -791,6 +798,17 @@ impl<T: Datagrams> PacketPlane<T> {
                     let Some(index) = local.and_then(|id| self.index.get(&id)) else {
                         self.counters.unknown_tunnel =
                             self.counters.unknown_tunnel.saturating_add(1);
+                        // Packets already on their way to a tunnel released moments ago are
+                        // expected. An Error Indication for them makes the peer delete a
+                        // context that the core is about to move.
+                        let now = self.now();
+                        if local.is_some_and(|id| {
+                            self.released_tunnels.iter().any(|(released, at)| {
+                                *released == id && now.saturating_sub(*at) < RELEASED_TUNNEL_GRACE
+                            })
+                        }) {
+                            continue;
+                        }
                         // TS 29.060 7.3.7: discard and return an Error Indication with the
                         // G-PDU's TEID and the address it was sent to.
                         let size = gtpu::error_indication(

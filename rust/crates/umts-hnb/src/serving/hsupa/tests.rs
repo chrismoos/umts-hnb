@@ -123,3 +123,35 @@ fn shared_control_codes_are_reserved_once_and_transferred_to_tx() {
     assert!(SharedChannels::reserve(&config, &mut resources, None).is_err());
     assert_eq!(resources.outstanding(), 0);
 }
+
+#[test]
+fn shared_decoder_storage_is_funded_by_the_cell_receive_budget() {
+    let mut config = config();
+    config.hspa.uplink.enabled = true;
+    let limits = config.hspa.uplink.resources.as_ref().unwrap();
+    let receive = &limits.receive;
+    let per_ue = receive.maximum_receive_bytes
+        + receive.maximum_catalog_bytes
+        + receive.report_bytes
+        + receive.packet_bytes;
+    let owners = u64::from(per_ue) * u64::from(config.runtime.maximum_ues);
+    config
+        .hspa
+        .uplink
+        .resources
+        .as_mut()
+        .unwrap()
+        .maximum_cell_receive_bytes = owners;
+    assert!(validate(&config).is_err());
+    let worker =
+        crate::hsupa_rx::decode::Worker::required_storage_bytes(config.runtime.maximum_ues)
+            .unwrap();
+    config
+        .hspa
+        .uplink
+        .resources
+        .as_mut()
+        .unwrap()
+        .maximum_cell_receive_bytes = owners + u64::try_from(worker).unwrap();
+    validate(&config).unwrap();
+}

@@ -107,6 +107,16 @@ fn prepared_tunnels_drop_early_data_and_released_handles_cannot_alias_a_new_gene
         .step(|_, _| panic!("retired TEID must not deliver"))
         .unwrap();
     assert_eq!(plane.counters().unknown_tunnel, 1);
+    assert_eq!(plane.counters().error_indications_sent, 0);
+    plane.set_test_time(std::time::Duration::from_secs(6));
+    plane
+        .io
+        .incoming
+        .push_back((data(first.local_teid(), b"stale"), peer()));
+    plane
+        .step(|_, _| panic!("retired TEID must not deliver"))
+        .unwrap();
+    assert_eq!(plane.counters().unknown_tunnel, 2);
     // TS 29.060 7.3.7: the stale G-PDU is answered with an Error Indication naming its TEID.
     assert_eq!(plane.counters().error_indications_sent, 1);
     let (bytes, to) = plane.io.outgoing.last().unwrap();

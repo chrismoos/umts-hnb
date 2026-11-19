@@ -359,27 +359,31 @@ fn filtered_preambles_preserve_signature_and_power_across_sample_phases() {
 #[cfg(target_feature = "avx2")]
 #[test]
 fn planar_eight_outputs_preserve_scalar_bits_at_every_history_offset() {
-    let length = vector::SPECIALIZED_TAPS;
-    let taps: Vec<_> = (0..length).map(|i| (i as f32 - 83.0) / 101.0).collect();
-    for gain in [0.0_f32, 1e-12, 1.0, 1e6] {
-        let values: Vec<_> = (0..length + INPUT_BLOCK_SAMPLES - 1)
-            .map(|i| {
-                Complex32::new(
-                    ((i * 17 % 101) as f32 - 50.0) * gain,
-                    ((i * 29 % 97) as f32 - 48.0) * gain,
-                )
-            })
-            .collect();
-        let planar = vector::PlanarBlock::new(&values);
-        for start in 0..=INPUT_BLOCK_SAMPLES - vector::PlanarBlock::OUTPUTS {
-            for (index, actual) in planar.consecutive_eight(start, &taps).iter().enumerate() {
-                let offset = start + vector::PlanarBlock::OUTPUTS - 1 - index;
-                let expected = filter_dot_scalar(&values[offset..offset + length], &taps);
-                assert_eq!(actual.re.to_bits(), expected.re.to_bits());
-                assert_eq!(actual.im.to_bits(), expected.im.to_bits());
+    fn compare<const TAPS: usize, const HISTORY: usize, const WINDOW: usize>() {
+        let length = TAPS;
+        let taps: Vec<_> = (0..length).map(|i| (i as f32 - 83.0) / 101.0).collect();
+        for gain in [0.0_f32, 1e-12, 1.0, 1e6] {
+            let values: Vec<_> = (0..length + INPUT_BLOCK_SAMPLES - 1)
+                .map(|i| {
+                    Complex32::new(
+                        ((i * 17 % 101) as f32 - 50.0) * gain,
+                        ((i * 29 % 97) as f32 - 48.0) * gain,
+                    )
+                })
+                .collect();
+            let planar = vector::PlanarBlockShape::<TAPS, HISTORY, WINDOW>::new(&values);
+            for start in 0..=INPUT_BLOCK_SAMPLES - 8 {
+                for (index, actual) in planar.consecutive_eight(start, &taps).iter().enumerate() {
+                    let offset = start + 8 - 1 - index;
+                    let expected = filter_dot_scalar(&values[offset..offset + length], &taps);
+                    assert_eq!(actual.re.to_bits(), expected.re.to_bits());
+                    assert_eq!(actual.im.to_bits(), expected.im.to_bits());
+                }
             }
         }
     }
+    compare::<33, 288, 40>();
+    compare::<65, 320, 72>();
 }
 
 #[test]
@@ -388,6 +392,9 @@ fn full_rate_tiny_chunks_and_reset_preserve_samples_near_timestamp_limit() {
         .map(|i| Complex32::new((i * 17 % 101) as f32 - 50.0, (i * 29 % 97) as f32 - 48.0))
         .collect();
     for (rate, span) in [
+        (SamplesPerChip::Two, 16),
+        (SamplesPerChip::Four, 8),
+        (SamplesPerChip::Eight, 4),
         (SamplesPerChip::Two, 32),
         (SamplesPerChip::Four, 16),
         (SamplesPerChip::Eight, 8),

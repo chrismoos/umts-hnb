@@ -202,6 +202,7 @@ fn periodic_refresh_requires_completed_airtime_and_fresh_nonempty_demand() {
             scheduling: Some(demand),
             happy: None,
             unhappy_streak: 0,
+            ..Default::default()
         },
     );
     peer.observe_uplink(
@@ -211,6 +212,7 @@ fn periodic_refresh_requires_completed_airtime_and_fresh_nonempty_demand() {
             scheduling: Some(demand),
             happy: None,
             unhappy_streak: 0,
+            ..Default::default()
         },
     );
     assert!(!owner.periodic_refresh_due(now));
@@ -232,6 +234,7 @@ fn periodic_refresh_requires_completed_airtime_and_fresh_nonempty_demand() {
             }),
             happy: None,
             unhappy_streak: 0,
+            ..Default::default()
         },
     );
     assert!(!owner.periodic_refresh_due(now));
@@ -243,6 +246,7 @@ fn periodic_refresh_requires_completed_airtime_and_fresh_nonempty_demand() {
             scheduling: Some(demand),
             happy: None,
             unhappy_streak: 0,
+            ..Default::default()
         },
     );
     assert!(!owner.periodic_refresh_due(now));
@@ -272,6 +276,7 @@ fn grant_adapts_between_floor_and_ceiling_from_happy_bit_and_idle_time() {
         }),
         happy: Some((at(now), false)),
         unhappy_streak: streak,
+        ..Default::default()
     };
     // Seven unhappy TTIs change nothing, the eighth raises one index, and the streak must
     // grow by another eight before the next step.
@@ -300,6 +305,7 @@ fn grant_adapts_between_floor_and_ceiling_from_happy_bit_and_idle_time() {
         scheduling: None,
         happy: Some((at(400), true)),
         unhappy_streak: 0,
+        ..Default::default()
     };
     let step = IDLE_CHIPS;
     grants.observe_uplink(at(400 + step), idle(400 + step));
@@ -332,6 +338,7 @@ fn demand(tick: u64, streak: u32) -> crate::hsupa_rx::GrantActivity {
         scheduling: None,
         happy: Some((at(tick), false)),
         unhappy_streak: streak,
+        ..Default::default()
     }
 }
 
@@ -412,4 +419,119 @@ fn grant_increase_requires_new_fresh_feedback_and_consistent_demand() {
     assert_eq!(owner.desired.value(), 11);
     owner.observe_uplink(at(next + 1), empty);
     assert_eq!(owner.desired.value(), 11);
+}
+
+#[test]
+fn first_transmission_failures_lower_the_grant_and_successes_restore_it() {
+    use crate::hsupa_rx::GrantActivity;
+    let source = source(true);
+    let (_resources, _bank, _radios, identities) = crate::hsupa_tx::tests::setup(&source);
+    let mut grants = Grants::new(identities[0], Tti::TwoMilliseconds, at(0), 0.1, 31).unwrap();
+    let quality = |decoded: u64, failed: u64| GrantActivity {
+        first_decoded: decoded,
+        first_failed: failed,
+        ..Default::default()
+    };
+    grants.observe_uplink(at(10), quality(0, 0));
+    grants.observe_uplink(at(20), quality(0, 19));
+    assert_eq!(grants.desired.value(), 31);
+    grants.observe_uplink(at(30), quality(0, 20));
+    assert_eq!(grants.desired.value(), 30);
+    assert_eq!(grants.counters().lowered, 1);
+    grants.observe_uplink(at(40), quality(0, 40));
+    grants.observe_uplink(at(50), quality(0, 60));
+    assert_eq!(grants.desired.value(), 28);
+    grants.observe_uplink(at(60), quality(190, 70));
+    assert_eq!(grants.desired.value(), 28);
+    let second = umts_types::time::CHIPS_PER_SECOND;
+    grants.observe_uplink(at(50 + second - 1), quality(190 + 5000, 70));
+    assert_eq!(grants.desired.value(), 28);
+    grants.observe_uplink(at(50 + second), quality(190 + 5380, 70));
+    assert_eq!(grants.desired.value(), 29);
+    grants.observe_uplink(at(60 + second), quality(190 + 5380 + 1900, 70 + 100));
+    assert_eq!(grants.desired.value(), 29);
+    grants.observe_uplink(at(70 + second), quality(190 + 5380 + 2280, 70 + 100));
+    assert_eq!(grants.desired.value(), 30);
+    grants.observe_uplink(at(80 + second), quality(190 + 5380 + 2660, 70 + 100));
+    assert_eq!(grants.desired.value(), 31);
+    assert_eq!(grants.counters().raised, 3);
+    grants.observe_uplink(at(110), quality(0, 0));
+    grants.observe_uplink(at(120), quality(0, 0));
+    assert_eq!(grants.desired.value(), 31);
+}
+
+#[test]
+fn handsets_wanting_uplink_share_processes_and_keep_their_own_grant() {
+    use crate::hsupa_rx::{GrantActivity, SchedulingReport};
+    use umts_mac::hsupa::scheduling::SchedulingInformation;
+    let source = source(true);
+    let (_resources, _bank, _radios, identities) = crate::hsupa_tx::tests::setup(&source);
+    let mut grants = Grants::new(identities[0], Tti::TwoMilliseconds, at(0), 0.1, 31).unwrap();
+    let tti = grants.interval.chips();
+    let reported = |tick: u64, buffer: u8, bits: u64| GrantActivity {
+        scheduling: Some(SchedulingReport {
+            start: at(tick),
+            information: SchedulingInformation {
+                power_headroom_index: 20,
+                total_buffer_index: buffer,
+                priority_buffer_index: 0,
+                highest_priority_logical_channel: 4,
+            },
+        }),
+        payload_bits: bits,
+        ..Default::default()
+    };
+    for step in 0..=1000u64 {
+        grants.observe_uplink(at(step * tti), reported(step * tti, 15, step * 36));
+        assert!(!grants.demand(at(step * tti)));
+    }
+    assert_eq!(grants.used_bits_per_interval(), Some(36.0));
+    let start = 10_000 * tti;
+    for step in 0..500u64 {
+        grants.observe_uplink(at(start + step * tti), reported(start + step * tti, 24, 0));
+        assert!(!grants.demand(at(start + step * tti)));
+    }
+    let end = start + 500 * tti;
+    grants.observe_uplink(at(end), reported(end, 24, 0));
+    assert!(grants.demand(at(end)));
+    grants.observe_uplink(at(end + 200 * tti), reported(end, 24, 0));
+    assert!(!grants.backlog());
+    assert!(grants.demand(at(end + 1000 * tti)));
+    assert!(!grants.demand(at(end + 1001 * tti)));
+    let unhappy = end + 5000 * tti;
+    grants.observe_uplink(
+        at(unhappy),
+        GrantActivity {
+            happy: Some((at(unhappy), false)),
+            unhappy_streak: 8,
+            ..Default::default()
+        },
+    );
+    assert!(!grants.demand(at(unhappy)));
+    let unhappy = unhappy + 500 * tti;
+    grants.observe_uplink(
+        at(unhappy),
+        GrantActivity {
+            happy: Some((at(unhappy), false)),
+            unhappy_streak: 8,
+            ..Default::default()
+        },
+    );
+    assert!(grants.demand(at(unhappy)));
+    assert_eq!(grants.desired.value(), 31);
+    assert!(grants.allocate(at(unhappy), 0x55));
+    assert_eq!((grants.desired.value(), grants.allocation), (31, 0x55));
+    assert!(!grants.allocate(at(unhappy + 100 * tti), 0xaa));
+    let quality = |decoded: u64, failed: u64| GrantActivity {
+        first_decoded: decoded,
+        first_failed: failed,
+        ..Default::default()
+    };
+    let later = unhappy + 2000 * tti;
+    grants.observe_uplink(at(later), quality(0, 0));
+    assert!(grants.allocate(at(later), 0xaa));
+    grants.observe_uplink(at(later + 20 * tti), quality(0, 400));
+    assert_eq!(grants.desired.value(), 31);
+    grants.observe_uplink(at(later + 400 * tti), quality(0, 420));
+    assert_eq!(grants.desired.value(), 30);
 }

@@ -38,6 +38,7 @@ pub use registration::{
     ConnectionReleaseProgress, RegistrationFailure, RegistrationIdentity, RegistrationRequest,
 };
 pub use reports::Reports;
+pub(crate) use reports::{desire_process_allocation, retain_process_allocations};
 pub use scheduling::{FachTarget, FachWork};
 pub use security_driver::SecurityAction;
 pub use transport::ResetBlockers;
@@ -1481,6 +1482,27 @@ impl CommonSignalling {
         }
         if matches!(result, Err(SignallingError::Capacity)) {
             self.counters.backpressure = self.counters.backpressure.saturating_add(1);
+            if self.counters.backpressure.is_power_of_two() {
+                let message = entry.message.as_ref().ok();
+                let kind = message
+                    .map(|message| control::ControlMessageKind::from(&message.value.message));
+                let domain = message.and_then(|message| {
+                    umts_rrc::nas::inspect_uplink_nas(entry.bearer, message, false)
+                        .ok()
+                        .map(|nas| nas.domain())
+                });
+                let releasing = [umts_iuh::Domain::Cs, umts_iuh::Domain::Ps]
+                    .map(|domain| self.core.connection_releasing(key, domain));
+                let deferred = self
+                    .registry
+                    .get(key)
+                    .map(|context| !context.deferred.is_empty());
+                tracing::debug!(
+                    "RRC dedicated message waiting: key={key:?} bearer={:?} kind={kind:?} nas_domain={domain:?} releasing_cs_ps={releasing:?} deferred={deferred:?} count={}",
+                    entry.bearer,
+                    self.counters.backpressure,
+                );
+            }
         } else {
             if result.is_err()
                 && result != Err(SignallingError::RegistrationPending)
@@ -1706,6 +1728,12 @@ impl CommonSignalling {
                 let failed = context.control.state() == AmState::Failed
                     || context.nas_bearer.state() == AmState::Failed;
                 if expired || failed {
+                    tracing::warn!(
+                        "RRC context retired: ue={key:?} setup_phase={:?} expired={expired} control={:?} nas={:?}",
+                        context.setup.phase(),
+                        context.control.state(),
+                        context.nas_bearer.state()
+                    );
                     self.retire(key)?;
                     retired += 1;
                 } else {

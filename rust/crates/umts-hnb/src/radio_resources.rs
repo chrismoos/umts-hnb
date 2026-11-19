@@ -24,6 +24,9 @@ mod hsdpa;
 mod hsupa;
 mod reconfiguration;
 pub use hsdpa::SecondaryRadioResources;
+pub(crate) use hsdpa::lent_data_codes;
+#[cfg(test)]
+pub(crate) use hsdpa::set_lent_data_codes;
 pub use hsdpa::{HsdpaCodeLease, HsdpaCodeSet};
 pub use hsupa::{HsupaCodeLease, HsupaPoolIdentity, HsupaUserLease};
 pub use reconfiguration::{PreparedRadioChange, RetiredRadioCodes};
@@ -140,6 +143,8 @@ pub struct RadioResources {
     next: Option<NonZeroU64>,
     hsdpa: Option<NonZeroU64>,
     hsupa: Option<hsupa::Pool>,
+    lends_data_codes: bool,
+    loan: Option<hsdpa::DataCodeLoan>,
 }
 fn leaves(code: OvsfCode) -> std::ops::Range<usize> {
     // TS 25.213 4.3.1.1 places all descendants of one OVSF code in a contiguous subtree.
@@ -187,6 +192,8 @@ impl RadioResources {
             next: Some(NonZeroU64::MIN),
             hsdpa: None,
             hsupa: None,
+            lends_data_codes: true,
+            loan: None,
         })
     }
     pub fn outstanding(&self) -> usize {
@@ -280,12 +287,12 @@ impl RadioResources {
         codes
             .try_reserve_exact(count)
             .map_err(|_| Error::Capacity)?;
-        for tree in trees {
+        for (tree, borrow) in with_borrowing(trees) {
             codes.clear();
             for index in 0..physical.downlink_sf {
                 let code =
                     OvsfCode::new(physical.downlink_sf, index).map_err(|_| Error::Configuration)?;
-                if self.tree(tree)[leaves(code)].iter().all(|used| !*used) {
+                if self.code_free(tree, code, borrow, |_| false) {
                     codes.push(code);
                 }
                 if codes.len() == count {
@@ -294,6 +301,24 @@ impl RadioResources {
             }
         }
         Err(Error::Capacity)
+    }
+
+    fn code_free(
+        &self,
+        tree: ScramblingTree,
+        code: OvsfCode,
+        borrow: bool,
+        retained: impl Fn(usize) -> bool,
+    ) -> bool {
+        let lendable = (borrow && tree == ScramblingTree::PRIMARY)
+            .then(|| self.lendable())
+            .flatten()
+            .map(leaves);
+        leaves(code).all(|leaf| {
+            !self.tree(tree)[leaf]
+                || retained(leaf)
+                || lendable.as_ref().is_some_and(|range| range.contains(&leaf))
+        })
     }
 
     fn prepare_checked(
@@ -339,6 +364,7 @@ impl RadioResources {
         );
         validate(&plan)?;
         self.uplink.insert(uplink);
+        self.lend_for(tree, &codes);
         for code in &codes {
             self.tree_mut(tree)[leaves(*code)].fill(true)
         }
@@ -420,8 +446,18 @@ impl RadioResources {
         for code in reservation.codes {
             self.tree_mut(reservation.tree)[leaves(code)].fill(false)
         }
+        self.reclaim_loan();
         Ok(())
     }
+}
+
+fn with_borrowing(
+    trees: impl IntoIterator<Item = ScramblingTree>,
+) -> impl Iterator<Item = (ScramblingTree, bool)> {
+    trees.into_iter().flat_map(|tree| {
+        let borrow = (tree == ScramblingTree::PRIMARY).then_some((tree, true));
+        std::iter::once((tree, false)).chain(borrow)
+    })
 }
 
 #[cfg(test)]

@@ -589,6 +589,19 @@ mod tests;
 
 pub(super) fn fail(entry: &mut Entry, error: AdmissionError) {
     if entry.failure.is_none() {
+        if matches!(error, AdmissionError::Closed) {
+            tracing::debug!(
+                "Dedicated bearer closed: identity={:?} phase={:?}",
+                entry.identity,
+                entry.lifecycle.phase()
+            );
+        } else {
+            tracing::warn!(
+                "Dedicated bearer failed: identity={:?} phase={:?} error={error:?}",
+                entry.identity,
+                entry.lifecycle.phase()
+            );
+        }
         entry.failed_phase = Some(entry.lifecycle.phase());
         entry.failure = Some(error);
     }

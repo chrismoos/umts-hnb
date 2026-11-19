@@ -611,3 +611,80 @@ pub(super) fn reconfiguration_message(
             pdu::RadioBearerReconfigurationLaterThanR3::new(ie::RRCTransactionIdentifier(transaction.get()),
                 pdu::RadioBearerReconfigurationLaterThanR3CriticalExtensions::criticalExtensions(r5)))))
 }
+
+/// TS 25.331 10.3.6.99. Bit 0 of `processes` is the first HARQ process.
+pub(super) fn process_allocation_message(
+    parameters: &ActivationParameters,
+    transaction: TransactionId,
+    processes: u8,
+    secondary_cell_active: bool,
+) -> Result<class::DLDCCHMessage, DedicatedError> {
+    if processes == 0 {
+        return Err(DedicatedError::Format);
+    }
+    let allocation = rasn::types::BitString::from_slice(&[processes.reverse_bits()]);
+    let scheduling = ie::EDPDCHSchedulingTransmConfiguration::new(Some(allocation), None);
+    let uplink = ie::ULEDCHInformationR6::new(
+        None,
+        Some(
+            parameters
+                .control
+                .wire()
+                .map_err(|_| DedicatedError::Physical)?,
+        ),
+        Some(
+            parameters
+                .transport
+                .wire_reference_powers(
+                    &parameters.references,
+                    parameters.minimum,
+                    parameters.scheduling,
+                )
+                .map_err(|_| DedicatedError::Format)?,
+        ),
+        Some(scheduling),
+    );
+    if secondary_cell_active {
+        return r7::process_allocation(transaction, uplink);
+    }
+    let body = pdu::PhysicalChannelReconfigurationR6IEs {
+        integrity_protection_mode_info: None,
+        ciphering_mode_info: None,
+        activation_time: None,
+        delay_restriction_flag: None,
+        new_u_rnti: None,
+        new_c_rnti: None,
+        new_dsch_rnti: None,
+        new_h_rnti: None,
+        new_primary_e_rnti: None,
+        new_secondary_e_rnti: None,
+        rrc_state_indicator: ie::RRCStateIndicator::cell_DCH,
+        utran_drx_cycle_length_coeff: None,
+        cn_information_info: None,
+        ura_identity: None,
+        dl_counter_synchronisation_info: None,
+        frequency_info: None,
+        max_allowed_ul_tx_power: None,
+        ul_dpch_info: None,
+        ul_edch_information: Some(uplink),
+        dl_hspdsch_information: None,
+        dl_common_information: None,
+        dl_information_per_rl_list: None,
+        mbms_pl_service_restrict_info: None,
+    };
+    let r6 = pdu::PhysicalChannelReconfigurationLaterThanR3CriticalExtensionsCriticalExtensionsCriticalExtensions::r6(
+        pdu::PhysicalChannelReconfigurationLaterThanR3CriticalExtensionsCriticalExtensionsCriticalExtensionsR6::new(body, None, None),
+    );
+    let r5 = pdu::PhysicalChannelReconfigurationLaterThanR3CriticalExtensionsCriticalExtensions::criticalExtensions(r6);
+    Ok(class::DLDCCHMessage::new(
+        None,
+        class::DLDCCHMessageType::physicalChannelReconfiguration(
+            pdu::PhysicalChannelReconfiguration::later_than_r3(
+                pdu::PhysicalChannelReconfigurationLaterThanR3::new(
+                    ie::RRCTransactionIdentifier(transaction.get()),
+                    pdu::PhysicalChannelReconfigurationLaterThanR3CriticalExtensions::criticalExtensions(r5),
+                ),
+            ),
+        ),
+    ))
+}

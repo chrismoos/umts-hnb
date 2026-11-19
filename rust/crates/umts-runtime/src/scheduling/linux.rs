@@ -14,9 +14,13 @@ const MAXIMUM_NATIVE_THREADS: usize = 256;
 pub(super) fn apply(plan: &Plan, role: Role, tid: Pid, name: &str) -> io::Result<()> {
     let assignment = plan.assignment(role);
     let mut cpus = plan.allowed;
-    if let Some(cpu) = assignment.cpu {
-        cpus = CpuSet::new();
-        cpus.set(cpu as usize);
+    match assignment.cpu {
+        Some(super::Placement::Cpu(cpu)) => {
+            cpus = CpuSet::new();
+            cpus.set(cpu as usize);
+        }
+        Some(super::Placement::Performance) => cpus = plan.performance,
+        None => (),
     }
     sched_setaffinity(Some(tid), &cpus)?;
     let requested_policy = if assignment.fifo_priority.is_some() {
@@ -88,4 +92,33 @@ pub(super) fn threads() -> io::Result<Vec<(u32, String)>> {
         }
     }
     Ok(result)
+}
+
+pub(super) fn maximum_frequency(cpu: usize) -> Option<u64> {
+    std::fs::read_to_string(format!(
+        "/sys/devices/system/cpu/cpu{cpu}/cpufreq/cpuinfo_max_freq"
+    ))
+    .ok()?
+    .trim()
+    .parse()
+    .ok()
+}
+
+/// The allowed CPUs that share the highest maximum frequency. Without frequency information
+/// every allowed CPU counts as equally fast.
+pub(super) fn fastest(allowed: &CpuSet, frequency: impl Fn(usize) -> Option<u64>) -> CpuSet {
+    let rated: Vec<(usize, u64)> = (0..CpuSet::MAX_CPU)
+        .filter(|cpu| allowed.is_set(*cpu))
+        .filter_map(|cpu| Some((cpu, frequency(cpu)?)))
+        .collect();
+    let Some(top) = rated.iter().map(|(_, value)| *value).max() else {
+        return *allowed;
+    };
+    let mut fastest = CpuSet::new();
+    for (cpu, value) in rated {
+        if value == top {
+            fastest.set(cpu);
+        }
+    }
+    fastest
 }

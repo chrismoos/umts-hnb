@@ -36,7 +36,7 @@ radio:
   uarfcn_dl: 4400
   uarfcn_ul: 4175
   # Gains used with a B200/B210, not an RF calibration.
-  tx_gain_db: 78.0
+  tx_gain_db: 75.0
   rx_gain_db: 30.0
   # Receive path delay of the radio in RX samples, not software processing lead.
   # Measured on a B200/B210: 95.0 for single-carrier modes, 78.0 with dc-hspa.

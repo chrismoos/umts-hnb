@@ -16,7 +16,7 @@ mod messages;
 #[cfg(test)]
 mod tests;
 use conversion::*;
-pub(crate) use messages::{reconfigure, setup, setup_body};
+pub(crate) use messages::{process_allocation, reconfigure, setup, setup_body};
 
 const MAXIMUM_UARFCN: u16 = 16383;
 const MAXIMUM_SCRAMBLING_CODE: u16 = 511;

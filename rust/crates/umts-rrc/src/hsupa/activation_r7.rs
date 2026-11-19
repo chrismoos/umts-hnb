@@ -196,6 +196,13 @@ pub(in crate::hsupa) fn reconfiguration_message(
     )))
 }
 
+pub(super) fn process_allocation(
+    transaction: TransactionId,
+    uplink: ie::ULEDCHInformationR6,
+) -> Result<class::DLDCCHMessage, DedicatedError> {
+    crate::hsdpa::dual_cell::process_allocation(transaction, physical::edch(uplink))
+}
+
 fn transport(original: ie::ULAddReconfTransChInformationR6) -> ie::ULAddReconfTransChInformationR7 {
     match original {
         ie::ULAddReconfTransChInformationR6::dch_usch(dch) => ie::ULAddReconfTransChInformationR7::dch_usch(

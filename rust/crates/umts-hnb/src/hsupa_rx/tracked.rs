@@ -16,8 +16,8 @@ use umts_dsp::{
     coding::DecodeWork,
     dedicated::{LikelihoodSettings, UplinkDpchCode, UplinkSlot},
     hsupa::{
-        CollectionProgress, ControlDecision, ControlDecoder, SingleReferencePower, TransportPlan,
-        TtiCollector, UplinkChannels,
+        ChipEqualizer, CollectionProgress, ControlDecision, ControlDecoder, SingleReferencePower,
+        TransportPlan, TtiCollector, UplinkChannels,
     },
 };
 use umts_runtime::mailbox::Sender;
@@ -33,6 +33,8 @@ const MAX_CONTROL_OBSERVATIONS: usize = 512;
 const MAX_DATA_CHANNELS: usize = 4;
 const CONTROL_LOSS_REJECTIONS: u64 = 64;
 const CONTROL_LOSS_ADMISSIONS: u64 = 64;
+const MIN_CONTROL_RECOVERY_PRESENCE: f64 = 16.0;
+const MIN_CONTROL_RECOVERY_GAP: f64 = 16.0;
 
 #[derive(Default)]
 struct ControlLossRecorder {
@@ -122,6 +124,27 @@ impl ControlAdmission {
                 .normalized_margin
                 .is_some_and(|margin| margin >= self.minimum_margin)
     }
+
+    fn accepts_recovery(
+        decision: ControlDecision,
+        raw: ControlDecision,
+        presence: Option<f64>,
+        evidence: &[f64; umts_dsp::hsupa::CONTROL_BITS],
+    ) -> bool {
+        if raw.information != decision.information
+            || !presence
+                .is_some_and(|value| value.is_finite() && value >= MIN_CONTROL_RECOVERY_PRESENCE)
+            || !evidence.iter().all(|value| value.is_finite())
+        {
+            return false;
+        }
+        let energy: f64 = evidence.iter().map(|value| value * value).sum();
+        let normalization = (umts_dsp::hsupa::CONTROL_BITS as f64 * energy).sqrt();
+        normalization.is_finite()
+            && raw.normalized_margin.is_some_and(|margin| {
+                margin.is_finite() && margin * normalization >= MIN_CONTROL_RECOVERY_GAP
+            })
+    }
 }
 
 /// Normalized E-DPCCH score band within which a retransmission's stored format outranks the
@@ -180,6 +203,7 @@ impl TrackedFormat {
 
 struct Format {
     identity: Etfci,
+    transport_bits: usize,
     channels: UplinkChannels,
     gains: Vec<f64>,
     channel_bits: Vec<usize>,
@@ -192,6 +216,7 @@ pub struct DecodedTti<'a> {
     pub absolute_tti: u64,
     pub control: ControlDecision,
     pub received: Received<'a>,
+    pub transport_bits: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -257,20 +282,27 @@ struct PhysicalTrace {
     sender: Sender<(u64, Vec<f32>)>,
 }
 
+const OVERRUN_REPORT_INTERVAL: Duration = Duration::from_secs(10);
+
 pub struct TrackedReceiver {
     settings: TrackedSettings,
     collector: TtiCollector,
     collection: Option<CollectionEvidence>,
+    queued_collection: Option<(TtiCollector, Option<CollectionEvidence>)>,
+    spare_collector: Option<TtiCollector>,
     control: ControlDecoder,
     formats: Vec<Format>,
-    harq: HarqReceiver,
+    harq: super::decode::Backend,
     symbols: Vec<Complex64>,
+    equalizer: ChipEqualizer,
     likelihoods: Vec<f64>,
     physical: Vec<f32>,
     pending: Option<PendingTti>,
     delivery: Option<Delivery>,
     started: bool,
     dropped_intervals: u64,
+    parked_intervals: u64,
+    overrun_report: Option<(Instant, u64, u64)>,
     decode_work_per_slot: usize,
     control_trace: Option<ControlTrace>,
     control_loss: ControlLossRecorder,
@@ -330,18 +362,39 @@ impl TrackedReceiver {
         self.delivery.is_some()
     }
     pub fn pending(&self) -> bool {
-        self.pending.is_some() || self.collector.complete().is_some()
+        self.pending.is_some()
+            || self.collector.complete().is_some()
+            || self.queued_collection.is_some()
+    }
+
+    pub(crate) fn discard_collection_buffer(&mut self) -> bool {
+        if self.started || self.queued_collection.is_some() {
+            return false;
+        }
+        self.spare_collector.take().is_some()
     }
 
     // The shared DPCCH scrambling allocation is charged by the dedicated receiver.
     pub fn retained_bytes(&self) -> Result<usize, ReceiveError> {
+        let retained_collection_bytes = self
+            .spare_collector
+            .as_ref()
+            .map_or(0, |value| {
+                value.retained_bytes() - std::mem::size_of::<TtiCollector>()
+            })
+            .checked_add(self.queued_collection.as_ref().map_or(0, |(value, _)| {
+                value.retained_bytes() - std::mem::size_of::<TtiCollector>()
+            }))
+            .ok_or(ReceiveError::Budget)?;
         let parts = [
             std::mem::size_of::<Self>(),
             self.collector.retained_bytes() - std::mem::size_of::<TtiCollector>(),
+            retained_collection_bytes,
             self.control.retained_bytes() - std::mem::size_of::<ControlDecoder>(),
-            self.harq.retained_bytes()? - std::mem::size_of::<HarqReceiver>(),
+            self.harq.retained_bytes()? - std::mem::size_of::<super::decode::Backend>(),
             self.formats.capacity() * std::mem::size_of::<Format>(),
             self.symbols.capacity() * std::mem::size_of::<Complex64>(),
+            self.equalizer.retained_bytes(),
             self.likelihoods.capacity() * std::mem::size_of::<f64>(),
             self.physical.capacity() * std::mem::size_of::<f32>(),
             self.output_bytes(),
@@ -420,9 +473,11 @@ impl TrackedReceiver {
             }
             maximum_physical = maximum_physical.max(definition.plan.physical_bits());
             identities.push(definition.identity);
+            let transport_bits = definition.plan.payload_bits();
             plans.push((definition.identity, definition.plan));
             formats.push(Format {
                 identity: definition.identity,
+                transport_bits,
                 channels,
                 gains: definition.gain_ratios,
                 channel_bits,
@@ -438,7 +493,7 @@ impl TrackedReceiver {
             return Err(ReceiveError::Budget);
         }
         let collector = TtiCollector::new(
-            code,
+            Arc::clone(&code),
             settings.anchor.time,
             settings.interval,
             settings.control_gain_ratio,
@@ -446,6 +501,24 @@ impl TrackedReceiver {
             settings.retained_sample_bytes,
         )
         .map_err(ReceiveError::Dsp)?;
+        let spare_collector = if TtiCollector::required_storage_bytes(settings.interval)
+            .checked_mul(2)
+            .is_some_and(|bytes| bytes <= settings.retained_sample_bytes.get())
+        {
+            Some(
+                TtiCollector::new(
+                    Arc::clone(&code),
+                    settings.anchor.time,
+                    settings.interval,
+                    settings.control_gain_ratio,
+                    settings.likelihood,
+                    settings.retained_sample_bytes,
+                )
+                .map_err(ReceiveError::Dsp)?,
+            )
+        } else {
+            None
+        };
         let control = ControlDecoder::new(&identities).map_err(ReceiveError::Dsp)?;
         let harq = HarqReceiver::new(
             settings.identity.ue,
@@ -455,20 +528,27 @@ impl TrackedReceiver {
             settings.iterations,
             settings.soft_buffer_bytes,
         )?;
+        let harq = super::decode::Backend::new(settings.identity, harq)?;
+        let equalizer = ChipEqualizer::new(settings.interval);
         Ok(Self {
             settings,
             collector,
             collection: None,
+            queued_collection: None,
+            spare_collector,
             control,
             formats,
             harq,
             symbols: vec![Complex64::default(); maximum_symbols],
+            equalizer,
             likelihoods: vec![0.0; maximum_physical],
             physical: vec![0.0; maximum_physical],
             pending: None,
             delivery: None,
             started: false,
             dropped_intervals: 0,
+            parked_intervals: 0,
+            overrun_report: None,
             decode_work_per_slot,
             control_trace: None,
             control_loss: ControlLossRecorder::default(),
@@ -512,11 +592,40 @@ impl TrackedReceiver {
         }
     }
 
+    fn report_overruns(&mut self) {
+        let now = Instant::now();
+        let (since, parked, dropped) = self.overrun_report.unwrap_or((now, 0, 0));
+        if self.overrun_report.is_some() && now.duration_since(since) < OVERRUN_REPORT_INTERVAL {
+            return;
+        }
+        if self.overrun_report.is_some() {
+            tracing::warn!(
+                "HSUPA decoding overran its interval: ue={:?} waited={} dropped={} in {:.0} s. Decoding is too slow on this CPU.",
+                self.settings.identity.ue,
+                self.parked_intervals - parked,
+                self.dropped_intervals - dropped,
+                now.duration_since(since).as_secs_f64()
+            );
+        }
+        self.overrun_report = Some((now, self.parked_intervals, self.dropped_intervals));
+    }
+
     pub fn feed_worker(&mut self, slot: &UplinkSlot<'_>) -> Result<(), ReceiveError> {
         if self.collector.complete().is_some() {
-            self.collector.release();
-            self.dropped_intervals = self.dropped_intervals.saturating_add(1);
-            self.observe(ProgressEvent::DroppedInterval);
+            if self.queued_collection.is_none()
+                && let Some(mut spare) = self.spare_collector.take()
+            {
+                spare.release();
+                let complete = std::mem::replace(&mut self.collector, spare);
+                self.queued_collection = Some((complete, self.collection.take()));
+                self.parked_intervals = self.parked_intervals.saturating_add(1);
+            } else {
+                self.collector.release();
+                self.collection = None;
+                self.dropped_intervals = self.dropped_intervals.saturating_add(1);
+                self.observe(ProgressEvent::DroppedInterval);
+            }
+            self.report_overruns();
         }
         if self.feed(slot)? == CollectionProgress::Complete {
             self.observe(ProgressEvent::Collected(slot.start()));
@@ -560,7 +669,9 @@ impl TrackedReceiver {
         if !self.delivery.as_ref().is_some_and(Delivery::available) {
             return Ok(Publication::Closed);
         }
-        if self.pending.is_none() && self.collector.complete().is_some() {
+        if self.pending.is_none()
+            && (self.queued_collection.is_some() || self.collector.complete().is_some())
+        {
             match self.begin_ready()? {
                 StartProgress::Started => self.observe(ProgressEvent::AdmittedControl),
                 StartProgress::NoControl { .. } => {
@@ -589,7 +700,7 @@ impl TrackedReceiver {
             return Err(ReceiveError::Format);
         }
         let maximum_payload =
-            NonZeroUsize::new(self.harq.payload.len()).ok_or(ReceiveError::Format)?;
+            NonZeroUsize::new(self.harq.maximum_payload()).ok_or(ReceiveError::Format)?;
         let (delivery, port) = Delivery::new(capacity, maximum_payload, maximum_bytes)?;
         self.delivery = Some(delivery);
         Ok(port)
@@ -619,6 +730,12 @@ impl TrackedReceiver {
         let Some(received) = received else {
             return Ok(Publication::Pending);
         };
+        let transport_bits = self
+            .formats
+            .iter()
+            .find(|format| format.identity == pending.control.information.format)
+            .ok_or(ReceiveError::Format)?
+            .transport_bits;
         pending.timing.elapsed = pending.begun.elapsed();
         let decoded = DecodedTti {
             timing: Some(pending.timing),
@@ -627,6 +744,7 @@ impl TrackedReceiver {
             absolute_tti: pending.absolute_tti,
             control: pending.control,
             received,
+            transport_bits,
         };
         observe(&decoded, pending.presence_log_likelihood);
         delivery.publish(decoded);
@@ -644,6 +762,23 @@ impl TrackedReceiver {
     // Turbo work belongs on a DSP owner, never the radio reader or TX worker.
 
     pub fn begin_ready(&mut self) -> Result<StartProgress, ReceiveError> {
+        if self.pending.is_some() {
+            return Err(ReceiveError::Harq(umts_mac::hsupa::HarqError::Pending));
+        }
+        if let Some((complete, evidence)) = self.queued_collection.take() {
+            let collecting = std::mem::replace(&mut self.collector, complete);
+            let collecting_evidence = std::mem::replace(&mut self.collection, evidence);
+            let result = self.begin_ready_current();
+            self.collector.release();
+            let spare = std::mem::replace(&mut self.collector, collecting);
+            self.collection = collecting_evidence;
+            self.spare_collector = Some(spare);
+            result
+        } else {
+            self.begin_ready_current()
+        }
+    }
+    fn begin_ready_current(&mut self) -> Result<StartProgress, ReceiveError> {
         if self.pending.is_some() {
             return Err(ReceiveError::Harq(umts_mac::hsupa::HarqError::Pending));
         }
@@ -716,13 +851,33 @@ impl TrackedReceiver {
             .map_err(ReceiveError::Dsp)?;
         let presence_log_likelihood =
             decision.and_then(|value| collected.control_presence_log_likelihood(value));
+        let admitted = match decision {
+            Some(value) if self.settings.admission.accepts(value) => true,
+            Some(value)
+                if presence_log_likelihood
+                    .is_some_and(|likelihood| likelihood >= MIN_CONTROL_RECOVERY_PRESENCE) =>
+            {
+                collected
+                    .decode_control(&self.control)
+                    .map_err(ReceiveError::Dsp)?
+                    .is_some_and(|raw| {
+                        ControlAdmission::accepts_recovery(
+                            value,
+                            raw,
+                            presence_log_likelihood,
+                            collected.control_evidence(),
+                        )
+                    })
+            }
+            _ => false,
+        };
         if let Some(delivery) = self.delivery.as_ref()
             && !self.control_loss.recorded
         {
             let observation = ControlObservation {
                 start,
                 decision,
-                admitted: decision.is_some_and(|value| self.settings.admission.accepts(value)),
+                admitted,
                 evidence: *collected.control_evidence(),
                 measurements: None,
                 data_measurements: [None; MAX_DATA_CHANNELS],
@@ -738,7 +893,7 @@ impl TrackedReceiver {
         {
             let mut data_measurements = [None; MAX_DATA_CHANNELS];
             if let Some(decision) = decision
-                && self.settings.admission.accepts(decision)
+                && admitted
                 && let Some(format) = self
                     .formats
                     .iter()
@@ -761,7 +916,7 @@ impl TrackedReceiver {
             let _ = trace.sender.try_send(ControlObservation {
                 start,
                 decision,
-                admitted: decision.is_some_and(|value| self.settings.admission.accepts(value)),
+                admitted,
                 evidence: *collected.control_evidence(),
                 measurements: collected.measure_control().ok(),
                 data_measurements,
@@ -772,7 +927,7 @@ impl TrackedReceiver {
         let Some(decision) = decision else {
             return Ok(Prepared::NoControl(start));
         };
-        if !self.settings.admission.accepts(decision) {
+        if !admitted {
             return Ok(Prepared::Rejected(start, decision));
         }
         let format = self
@@ -780,6 +935,16 @@ impl TrackedReceiver {
             .iter()
             .find(|format| format.identity == decision.information.format)
             .ok_or(ReceiveError::Format)?;
+        let collected = if collected
+            .equalize(&format.channels, &format.gains, &mut self.equalizer)
+            .map_err(ReceiveError::Dsp)?
+        {
+            collected
+                .with_samples(self.equalizer.samples())
+                .map_err(ReceiveError::Dsp)?
+        } else {
+            collected
+        };
         let mut offset = 0;
         let mut channel = 0;
         while channel < format.channel_bits.len() {

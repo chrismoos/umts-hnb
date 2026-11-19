@@ -116,6 +116,7 @@ struct Entry {
     failure: Option<DedicatedControlError>,
     bytes: usize,
     mapping_removal: Option<MappingRemoval>,
+    receive_status: Option<(ReceiveIdentity, crate::dedicated_rx::ReceivePlanStatus)>,
 }
 struct MappingRemoval {
     previous: ReceiveIdentity,
@@ -193,7 +194,7 @@ impl DedicatedController {
     }
     pub fn service_receive_diagnostics(
         &mut self,
-        mut visit: impl FnMut(ReceiveIdentity, crate::dedicated_rx::ReceivePlanStatus),
+        mut visit: impl FnMut(ReceiveIdentity, &crate::dedicated_rx::ReceivePlanStatus),
     ) -> usize {
         let mut completed = 0;
         if let Some((requested, ticket)) = &mut self.observation {
@@ -209,6 +210,8 @@ impl DedicatedController {
                 && identity == requested
                 && self.phase(identity) == Some(DedicatedPhase::Active)
             {
+                let entry = self.entry_mut(identity).expect("active observed receiver");
+                let (_, status) = entry.receive_status.insert((identity, status));
                 visit(identity, status);
                 completed = 1;
             }
@@ -232,6 +235,20 @@ impl DedicatedController {
             break;
         }
         completed
+    }
+    pub fn visit_receive_diagnostics(
+        &self,
+        mut visit: impl FnMut(ReceiveIdentity, &crate::dedicated_rx::ReceivePlanStatus),
+    ) {
+        for entry in self.entries.iter().flatten() {
+            if entry.phase == DedicatedPhase::Active
+                && entry.failure.is_none()
+                && let Some((identity, status)) = &entry.receive_status
+                && entry.bank.identity() == *identity
+            {
+                visit(*identity, status);
+            }
+        }
     }
     pub fn capacity(&self) -> usize {
         self.entries.len()
@@ -974,6 +991,7 @@ impl DedicatedController {
             failure: None,
             bytes,
             mapping_removal: None,
+            receive_status: None,
         });
         self.used_bytes = used;
         self.counters.staged = self.counters.staged.saturating_add(1);

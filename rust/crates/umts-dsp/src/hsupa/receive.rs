@@ -18,6 +18,78 @@ use umts_types::{
 
 const CONTROL_SYMBOLS_PER_SLOT: usize = 10;
 const CONTROL_SLOTS: usize = CONTROL_BITS / CONTROL_SYMBOLS_PER_SLOT;
+const EQUALIZER_SPAN: usize = 4;
+const EQUALIZER_TAPS: usize = 2 * EQUALIZER_SPAN + 1;
+const EQUALIZER_LOADING: f64 = 1e-3;
+
+pub struct ChipEqualizer {
+    received: Vec<Complex64>,
+    target: Vec<Complex64>,
+    equalized: Vec<Complex64>,
+    scratch: Vec<Complex64>,
+}
+
+impl ChipEqualizer {
+    pub fn new(interval: Tti) -> Self {
+        let chips = interval.chips() as usize;
+        Self {
+            received: vec![Complex64::default(); chips],
+            target: vec![Complex64::default(); chips],
+            equalized: vec![Complex64::default(); chips],
+            scratch: vec![Complex64::default(); CHIPS_PER_SLOT as usize / 2],
+        }
+    }
+    pub fn retained_bytes(&self) -> usize {
+        (self.received.capacity()
+            + self.target.capacity()
+            + self.equalized.capacity()
+            + self.scratch.capacity())
+            * std::mem::size_of::<Complex64>()
+    }
+    pub fn samples(&self) -> &[Complex64] {
+        &self.equalized
+    }
+}
+
+fn solve_taps(
+    mut matrix: [[Complex64; EQUALIZER_TAPS]; EQUALIZER_TAPS],
+    mut vector: [Complex64; EQUALIZER_TAPS],
+) -> Option<[Complex64; EQUALIZER_TAPS]> {
+    for column in 0..EQUALIZER_TAPS {
+        let pivot = (column..EQUALIZER_TAPS).max_by(|a, b| {
+            matrix[*a][column]
+                .norm_sqr()
+                .total_cmp(&matrix[*b][column].norm_sqr())
+        })?;
+        let magnitude = matrix[pivot][column].norm_sqr();
+        if !magnitude.is_finite() || magnitude <= 0.0 {
+            return None;
+        }
+        matrix.swap(column, pivot);
+        vector.swap(column, pivot);
+        for row in column + 1..EQUALIZER_TAPS {
+            let factor = matrix[row][column] / matrix[column][column];
+            let pivot_row = matrix[column];
+            for (cell, value) in matrix[row][column..].iter_mut().zip(&pivot_row[column..]) {
+                *cell -= factor * value;
+            }
+            let value = vector[column];
+            vector[row] -= factor * value;
+        }
+    }
+    let mut taps = [Complex64::default(); EQUALIZER_TAPS];
+    for row in (0..EQUALIZER_TAPS).rev() {
+        let mut value = vector[row];
+        for index in row + 1..EQUALIZER_TAPS {
+            value -= matrix[row][index] * taps[index];
+        }
+        taps[row] = value / matrix[row][row];
+        if !taps[row].re.is_finite() || !taps[row].im.is_finite() {
+            return None;
+        }
+    }
+    Some(taps)
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DataMeasurements {
@@ -50,6 +122,7 @@ pub struct TtiCollector {
     samples: Vec<Complex64>,
     pilots: Vec<PilotEstimate>,
     pilot_counts: Vec<usize>,
+    frame_slots: Vec<usize>,
     control_soft: [f64; CONTROL_BITS],
     presence_correlation: [f64; CONTROL_BITS],
     presence_expected: f64,
@@ -67,14 +140,15 @@ impl TtiCollector {
         std::mem::size_of::<Self>()
             + self.samples.capacity() * std::mem::size_of::<Complex64>()
             + self.pilots.capacity() * std::mem::size_of::<PilotEstimate>()
-            + self.pilot_counts.capacity() * std::mem::size_of::<usize>()
+            + (self.pilot_counts.capacity() + self.frame_slots.capacity())
+                * std::mem::size_of::<usize>()
             + self.control.retained_bytes()
             - std::mem::size_of::<UplinkChannels>()
     }
     pub fn required_storage_bytes(interval: Tti) -> usize {
         interval.chips() as usize * std::mem::size_of::<Complex64>()
             + (interval.chips() / CHIPS_PER_SLOT) as usize
-                * (std::mem::size_of::<PilotEstimate>() + std::mem::size_of::<usize>())
+                * (std::mem::size_of::<PilotEstimate>() + 2 * std::mem::size_of::<usize>())
     }
 
     pub fn new(
@@ -110,6 +184,7 @@ impl TtiCollector {
                 slots
             ],
             pilot_counts: vec![0; slots],
+            frame_slots: vec![0; slots],
             control_soft: [0.0; CONTROL_BITS],
             presence_correlation: [0.0; CONTROL_BITS],
             presence_expected: 0.0,
@@ -177,6 +252,7 @@ impl TtiCollector {
             .copy_from_slice(slot.corrected_samples());
         self.pilots[self.collected] = slot.control().pilot;
         self.pilot_counts[self.collected] = slot.pilot_count();
+        self.frame_slots[self.collected] = slot.frame_slot();
         for (index, value) in llrs.into_iter().enumerate() {
             self.control_soft[control_offset + index] += value;
         }
@@ -201,7 +277,10 @@ impl TtiCollector {
     }
 
     pub fn complete(&self) -> Option<CollectedTti<'_>> {
-        (self.collected == self.pilots.len()).then_some(CollectedTti { collector: self })
+        (self.collected == self.pilots.len()).then_some(CollectedTti {
+            collector: self,
+            samples: &self.samples,
+        })
     }
 
     pub fn release(&mut self) {
@@ -220,6 +299,7 @@ impl TtiCollector {
 
 pub struct CollectedTti<'a> {
     collector: &'a TtiCollector,
+    samples: &'a [Complex64],
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -230,7 +310,143 @@ pub struct ControlMeasurements {
     pub control_quadrature_power: f64,
 }
 
-impl CollectedTti<'_> {
+impl<'a> CollectedTti<'a> {
+    pub fn equalize(
+        &self,
+        channels: &UplinkChannels,
+        gain_ratios: &[f64],
+        equalizer: &mut ChipEqualizer,
+    ) -> Result<bool, DspError> {
+        let collector = self.collector;
+        let chips = collector.samples.len();
+        let slot_chips = CHIPS_PER_SLOT as usize;
+        if equalizer.received.len() != chips
+            || equalizer.target.len() != chips
+            || equalizer.equalized.len() != chips
+        {
+            return Err(DspError::InvalidLength);
+        }
+        let scrambling = collector.code.scrambling();
+        let code = |slot: usize, chip: usize| {
+            let value = scrambling[collector.frame_slots[slot] * slot_chips + chip];
+            Complex64::new(f64::from(value.re), f64::from(value.im))
+        };
+        for (index, pilot) in collector.pilots.iter().enumerate() {
+            let first = index * slot_chips;
+            let slot = SlotEvidence {
+                code: &collector.code,
+                start: ChipInstant {
+                    index: self.start().index + index as u64 * CHIPS_PER_SLOT,
+                    ..self.start()
+                },
+                samples: &collector.samples[first..first + slot_chips],
+                pilot: *pilot,
+                pilot_count: collector.pilot_counts[index],
+            };
+            channels.data_reference_chips(
+                &slot,
+                gain_ratios,
+                &mut equalizer.scratch,
+                &mut equalizer.target[first..first + slot_chips],
+            )?;
+            for chip in 0..slot_chips {
+                let scramble = code(index, chip);
+                equalizer.received[first + chip] = collector.samples[first + chip] * scramble;
+                equalizer.target[first + chip] *= scramble * 0.5;
+            }
+        }
+        let received = &equalizer.received;
+        let target = &equalizer.target;
+        let mut correlation = [Complex64::default(); EQUALIZER_TAPS];
+        for (lag, value) in correlation.iter_mut().enumerate() {
+            *value = received[..chips - lag]
+                .iter()
+                .zip(&received[lag..])
+                .map(|(early, late)| early.conj() * late)
+                .sum::<Complex64>()
+                * 0.5;
+        }
+        let mut cross = [Complex64::default(); EQUALIZER_TAPS];
+        for (tap, value) in cross.iter_mut().enumerate() {
+            *value = if tap >= EQUALIZER_SPAN {
+                let offset = tap - EQUALIZER_SPAN;
+                received[offset..]
+                    .iter()
+                    .zip(&target[..chips - offset])
+                    .map(|(sample, wanted)| sample.conj() * wanted)
+                    .sum::<Complex64>()
+            } else {
+                let offset = EQUALIZER_SPAN - tap;
+                received[..chips - offset]
+                    .iter()
+                    .zip(&target[offset..])
+                    .map(|(sample, wanted)| sample.conj() * wanted)
+                    .sum::<Complex64>()
+            };
+        }
+        let loading = EQUALIZER_LOADING * correlation[0].re;
+        if !loading.is_finite() || loading <= 0.0 {
+            return Ok(false);
+        }
+        let mut matrix = [[Complex64::default(); EQUALIZER_TAPS]; EQUALIZER_TAPS];
+        for (row, values) in matrix.iter_mut().enumerate() {
+            for (column, value) in values.iter_mut().enumerate() {
+                *value = if column >= row {
+                    correlation[column - row]
+                } else {
+                    correlation[row - column].conj()
+                };
+            }
+            values[row] += loading;
+        }
+        let Some(taps) = solve_taps(matrix, cross) else {
+            return Ok(false);
+        };
+        let mut target_power = 0.0;
+        let mut alignment = Complex64::default();
+        for (chip, (reference, output)) in target[..chips]
+            .iter()
+            .zip(&mut equalizer.equalized[..chips])
+            .enumerate()
+        {
+            let mut value = Complex64::default();
+            for (tap, weight) in taps.iter().enumerate() {
+                if let Some(sample) = (chip + tap)
+                    .checked_sub(EQUALIZER_SPAN)
+                    .and_then(|at| received.get(at))
+                {
+                    value += weight * sample;
+                }
+            }
+            target_power += reference.norm_sqr();
+            alignment += reference.conj() * value;
+            *output = value;
+        }
+        let scale = Complex64::new(2.0 * target_power, 0.0) / alignment;
+        let magnitude = scale.norm();
+        if !magnitude.is_finite() || !(0.5..=4.0).contains(&magnitude) {
+            return Ok(false);
+        }
+        for index in 0..collector.pilots.len() {
+            let first = index * slot_chips;
+            for chip in 0..slot_chips {
+                let value = &mut equalizer.equalized[first + chip];
+                *value = *value * scale * code(index, chip).conj() * 0.5;
+                if !value.re.is_finite() || !value.im.is_finite() {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    pub fn with_samples(self, samples: &'a [Complex64]) -> Result<Self, DspError> {
+        if samples.len() != self.collector.samples.len() {
+            return Err(DspError::InvalidLength);
+        }
+        Ok(Self { samples, ..self })
+    }
+
     // Equal-variance complex Gaussian likelihood of the selected word versus silence.
     // Pilot uncertainty is included, but this model is not a calibrated RF false-alarm bound.
     pub fn control_presence_log_likelihood(&self, decision: ControlDecision) -> Option<f64> {
@@ -340,7 +556,7 @@ impl CollectedTti<'_> {
                     index: self.start().index + index as u64 * CHIPS_PER_SLOT,
                     ..self.start()
                 },
-                samples: &self.collector.samples[first..first + CHIPS_PER_SLOT as usize],
+                samples: &self.samples[first..first + CHIPS_PER_SLOT as usize],
                 pilot: self.collector.pilots[index],
                 pilot_count: self.collector.pilot_counts[index],
             };
@@ -446,7 +662,7 @@ impl CollectedTti<'_> {
                     index: self.start().index + index as u64 * CHIPS_PER_SLOT,
                     ..self.start()
                 },
-                samples: &self.collector.samples[first..first + CHIPS_PER_SLOT as usize],
+                samples: &self.samples[first..first + CHIPS_PER_SLOT as usize],
                 pilot: self.collector.pilots[index],
                 pilot_count: self.collector.pilot_counts[index],
             };
@@ -515,7 +731,7 @@ impl CollectedTti<'_> {
                     index: self.start().index + index as u64 * CHIPS_PER_SLOT,
                     ..self.start()
                 },
-                samples: &self.collector.samples[first..first + CHIPS_PER_SLOT as usize],
+                samples: &self.samples[first..first + CHIPS_PER_SLOT as usize],
                 pilot: *pilot,
                 pilot_count: self.collector.pilot_counts[index],
             };

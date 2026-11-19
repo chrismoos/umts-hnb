@@ -257,11 +257,21 @@ fn append_hsupa_scheduling(
 pub fn receive_metrics(ue: &mut proto::Ue, status: &crate::dedicated_rx::ReceivePlanStatus) {
     let values = &mut ue.counters.get_or_insert_default().values;
     append_receive_counters(values, &status.transports);
-    const DROPPED: &str = "downlink_power.feedback_dropped";
-    if let Some(counter) = values.iter_mut().find(|counter| counter.name == DROPPED) {
-        counter.value = status.samples.downlink_feedback_dropped;
-    } else {
-        values.push(counter(DROPPED, status.samples.downlink_feedback_dropped));
+    for (name, value) in [
+        (
+            "rx.dch.hsupa_dropped_intervals",
+            status.hsupa_dropped_intervals,
+        ),
+        (
+            "downlink_power.feedback_dropped",
+            status.samples.downlink_feedback_dropped,
+        ),
+    ] {
+        if let Some(previous) = values.iter_mut().find(|entry| entry.name == name) {
+            previous.value = value;
+        } else {
+            values.push(counter(name, value));
+        }
     }
     let mut power = proto::PowerControl {
         target_sir_db: status.outer_loop.as_ref().map(|outer| outer.target.db()),

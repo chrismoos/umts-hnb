@@ -50,4 +50,5 @@ mod test_support;
 mod application;
 mod main_management;
 mod thread_scheduling;
+mod uplink_noise;
 pub use application::run_cli as run;

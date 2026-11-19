@@ -29,6 +29,7 @@ pub use ingress::{
     GrantActivity, Ingress, IngressCounters, IngressError, IngressInputs, IngressProgress,
     IngressSettings, IngressStep, SchedulingReport,
 };
+pub(crate) mod decode;
 mod tracked;
 pub use tracked::{
     ControlAdmission, ControlObservation, DecodeTiming, DecodedTti, TrackedFormat, TrackedReceiver,

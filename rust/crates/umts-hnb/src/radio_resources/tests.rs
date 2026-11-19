@@ -43,41 +43,46 @@ fn codes(allocation: &AllocatedRadio) -> Vec<OvsfCode> {
         .collect()
 }
 
-#[test]
-fn fifteen_hsdpa_codes_and_hsupa_allow_two_sf128_dedicated_users() {
-    let cell = test_support::plan(true);
-    let mut resources =
-        RadioResources::new(key(0).epoch, cell.information(), count(2), 17..=18).unwrap();
-    let common = resources.occupied;
-    let hsdpa = resources
-        .reserve_hsdpa(NonZeroU8::new(15).unwrap(), NonZeroU8::MIN)
-        .unwrap();
-    let hsupa = resources.reserve_hsupa().unwrap();
+fn sf128_template() -> Rel99Configuration {
     let template = fixture::configuration(false, false, 10);
     let mut physical = template.physical().clone();
     physical.downlink_sf = 128;
     physical.downlink_pilot_bits = 8;
     physical.downlink_codes = vec![0];
-    let template = template.with_physical(physical).unwrap();
+    template.with_physical(physical).unwrap()
+}
+
+#[test]
+fn sf128_users_borrow_the_lowest_hsdpa_code_until_the_last_one_leaves() {
+    let cell = test_support::plan(true);
+    let mut resources =
+        RadioResources::new(key(0).epoch, cell.information(), count(3), 17..=19).unwrap();
+    let common = resources.occupied;
+    let hsdpa = resources
+        .reserve_hsdpa(NonZeroU8::new(15).unwrap(), NonZeroU8::MIN)
+        .unwrap();
+    let hsupa = resources.reserve_hsupa().unwrap();
+    let loan = OvsfCode::new(16, u16::from(hsdpa.codes().first_data())).unwrap();
+    let template = sf128_template();
     let first = prepare(&mut resources, key(0), &template).unwrap();
+    assert!(codes(&first).iter().all(|code| !code.overlaps(loan)));
+    assert_eq!(lent_data_codes(), 0);
     let primary = resources.occupied;
     let second = prepare(&mut resources, key(1), &template).unwrap();
-    assert_eq!(
-        first.plan().configuration().physical().secondary_scrambling,
-        None
-    );
-    assert_eq!(
-        second
-            .plan()
-            .configuration()
-            .physical()
-            .secondary_scrambling,
-        Some(1)
-    );
-    assert_eq!(resources.occupied, primary);
-    assert!(resources.secondary_occupied[0].iter().any(|used| *used));
-    resources.cancel(second).unwrap();
-    assert_eq!(resources.occupied, primary);
+    let third = prepare(&mut resources, key(2), &template).unwrap();
+    for borrower in [&second, &third] {
+        assert_eq!(
+            borrower
+                .plan()
+                .configuration()
+                .physical()
+                .secondary_scrambling,
+            None
+        );
+        assert!(codes(borrower).iter().all(|code| code.overlaps(loan)));
+    }
+    assert_ne!(codes(&second), codes(&third));
+    assert_eq!(lent_data_codes(), 1 << loan.index());
     assert!(
         resources
             .secondary_occupied
@@ -85,6 +90,11 @@ fn fifteen_hsdpa_codes_and_hsupa_allow_two_sf128_dedicated_users() {
             .flatten()
             .all(|used| !*used)
     );
+    resources.cancel(second).unwrap();
+    assert_eq!(lent_data_codes(), 1 << loan.index());
+    resources.cancel(third).unwrap();
+    assert_eq!(lent_data_codes(), 0);
+    assert_eq!(resources.occupied, primary);
     resources.cancel(first).unwrap();
     resources.release_hsupa(hsupa).unwrap();
     resources.release_hsdpa(hsdpa).unwrap();
@@ -92,7 +102,53 @@ fn fifteen_hsdpa_codes_and_hsupa_allow_two_sf128_dedicated_users() {
 }
 
 #[test]
-fn primary_space_can_fit_sf256_after_sf128_requires_secondary_overflow() {
+fn a_reconfiguration_that_needs_room_borrows_and_retirement_returns_the_code() {
+    let cell = test_support::plan(true);
+    let mut resources =
+        RadioResources::new(key(0).epoch, cell.information(), count(2), 17..=18).unwrap();
+    let hsdpa = resources
+        .reserve_hsdpa(NonZeroU8::new(15).unwrap(), NonZeroU8::MIN)
+        .unwrap();
+    let _hsupa = resources.reserve_hsupa().unwrap();
+    let loan = OvsfCode::new(16, u16::from(hsdpa.codes().first_data())).unwrap();
+    let _voice = prepare(&mut resources, key(0), &sf128_template()).unwrap();
+    let template = fixture::configuration(false, false, 10);
+    let mut physical = template.physical().clone();
+    physical.downlink_sf = 256;
+    physical.downlink_pilot_bits = 4;
+    physical.downlink_codes = vec![0];
+    let signalling = prepare(
+        &mut resources,
+        key(1),
+        &template.with_physical(physical).unwrap(),
+    )
+    .unwrap();
+    assert!(codes(&signalling).iter().all(|code| !code.overlaps(loan)));
+    assert_eq!(lent_data_codes(), 0);
+    let change = resources
+        .prepare_reconfiguration(
+            signalling.lease(),
+            signalling.plan(),
+            &sf128_template(),
+            count(MAXIMUM_CODED_BITS),
+            limits(),
+        )
+        .unwrap();
+    let staged = change.plan().configuration().physical();
+    assert_eq!(staged.secondary_scrambling, None);
+    assert!(
+        staged
+            .downlink_codes
+            .iter()
+            .all(|index| OvsfCode::new(128, *index).unwrap().overlaps(loan))
+    );
+    assert_eq!(lent_data_codes(), 1 << loan.index());
+    resources.cancel_reconfiguration(change).unwrap();
+    assert_eq!(lent_data_codes(), 0);
+}
+
+#[test]
+fn primary_space_fits_sf256_beside_sf128_without_borrowing() {
     let cell = test_support::plan(true);
     let mut resources =
         RadioResources::new(key(0).epoch, cell.information(), count(2), 17..=18).unwrap();
@@ -112,10 +168,8 @@ fn primary_space_can_fit_sf256_after_sf128_requires_secondary_overflow() {
         &template.with_physical(physical.clone()).unwrap(),
     )
     .unwrap();
-    assert_eq!(
-        resources.check_primary_downlink_space(&physical),
-        Err(Error::Capacity)
-    );
+    resources.check_primary_downlink_space(&physical).unwrap();
+    assert_eq!(lent_data_codes(), 0);
     resources.check_downlink_space(&physical).unwrap();
     physical.downlink_sf = 256;
     physical.downlink_pilot_bits = 4;
@@ -134,6 +188,7 @@ fn primary_space_can_fit_sf256_after_sf128_requires_secondary_overflow() {
             .secondary_scrambling,
         None
     );
+    assert_eq!(lent_data_codes(), 0);
     resources.cancel(second).unwrap();
     resources.cancel(first).unwrap();
     resources.release_hsupa(hsupa).unwrap();

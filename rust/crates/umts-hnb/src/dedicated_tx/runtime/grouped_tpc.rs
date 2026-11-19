@@ -35,7 +35,17 @@ impl GroupedTpc {
         if self.group != Some(group) {
             self.group = Some(group);
             let cadence = u64::from(self.hold_groups) + 1;
-            let control_group = group % cadence == u64::from(self.hold_groups);
+            let fresh = |estimate: &TpcEstimate| {
+                estimate.observed_at().epoch == start.epoch
+                    && estimate.observed_at().index <= start.index
+                    && estimate.valid_until().index > start.index
+            };
+            // A handset far above target, as at the start of its dedicated channel, is
+            // corrected in every group so its burst over the other handsets ends sooner.
+            let control_group = group % cadence == u64::from(self.hold_groups)
+                || estimate
+                    .as_ref()
+                    .is_some_and(|estimate| fresh(estimate) && estimate.far_above_target());
             self.command = None;
             let groups = &mut counters.groups;
             if position != 0 {
@@ -43,10 +53,7 @@ impl GroupedTpc {
             } else if !control_group {
                 groups.cadence_hold = groups.cadence_hold.saturating_add(1);
             } else if let Some(estimate) = estimate {
-                if estimate.observed_at().epoch != start.epoch
-                    || estimate.observed_at().index > start.index
-                    || estimate.valid_until().index <= start.index
-                {
+                if !fresh(&estimate) {
                     groups.stale_hold = groups.stale_hold.saturating_add(1);
                 } else {
                     // TS 25.214 5.1.2.2.3.1 encodes one correction as five equal commands.

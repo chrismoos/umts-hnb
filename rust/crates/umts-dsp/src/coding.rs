@@ -30,6 +30,26 @@ impl DecodeWork {
     pub fn remaining(self) -> usize {
         self.remaining
     }
+    pub fn with_limit<R>(&mut self, maximum: NonZeroUsize, run: impl FnOnce(&mut Self) -> R) -> R {
+        let granted = self.remaining.min(maximum.get());
+        self.remaining -= granted;
+        struct Refund<'a> {
+            parent: &'a mut DecodeWork,
+            local: DecodeWork,
+            granted: usize,
+        }
+        impl Drop for Refund<'_> {
+            fn drop(&mut self) {
+                self.parent.remaining += self.local.remaining.min(self.granted);
+            }
+        }
+        let mut scope = Refund {
+            parent: self,
+            local: DecodeWork { remaining: granted },
+            granted,
+        };
+        run(&mut scope.local)
+    }
     pub(crate) fn consume(&mut self, state_updates: usize) -> bool {
         if self.remaining < state_updates {
             return false;
@@ -265,5 +285,53 @@ impl CodedBlockDecoder {
             Self::Convolutional(decoder) => decoder.step(input, output, work),
             Self::Turbo(decoder) => decoder.step(input, output, work),
         }
+    }
+}
+
+#[cfg(test)]
+mod work_budget_tests {
+    use super::*;
+    fn n(v: usize) -> NonZeroUsize {
+        NonZeroUsize::new(v).unwrap()
+    }
+    #[test]
+    fn partial_nested_exhausted_and_error_budgets() {
+        let mut p = DecodeWork::new(n(20));
+        p.with_limit(n(7), |c| {
+            assert_eq!(c.remaining(), 7);
+            assert!(!c.consume(8));
+            assert!(c.consume(3));
+            c.with_limit(n(9), |d| {
+                assert_eq!(d.remaining(), 4);
+                assert!(d.consume(2));
+            });
+            assert_eq!(c.remaining(), 2);
+        });
+        assert_eq!(p.remaining(), 15);
+        let result: Result<(), u8> = p.with_limit(n(99), |c| {
+            assert_eq!(c.remaining(), 15);
+            assert!(c.consume(5));
+            Err(7)
+        });
+        assert_eq!(result, Err(7));
+        assert_eq!(p.remaining(), 10);
+        assert!(p.consume(10));
+        p.with_limit(n(3), |c| {
+            assert_eq!(c.remaining(), 0);
+            assert!(!c.consume(1));
+        });
+        assert_eq!(p.remaining(), 0);
+    }
+    #[test]
+    fn unwinding_refunds_only_unused_work() {
+        let mut p = DecodeWork::new(n(50));
+        let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            p.with_limit(n(12), |c| {
+                assert!(c.consume(5));
+                panic!("expected")
+            })
+        }));
+        assert!(got.is_err());
+        assert_eq!(p.remaining(), 45);
     }
 }

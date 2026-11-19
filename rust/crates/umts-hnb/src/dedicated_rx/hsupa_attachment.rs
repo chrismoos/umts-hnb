@@ -40,6 +40,10 @@ impl HsupaAttachment {
         }
     }
 
+    pub(crate) fn discard_collection_buffer(&mut self) -> bool {
+        self.receiver.discard_collection_buffer()
+    }
+
     /// Prepare all eligible initial TTI starts before publishing to RX.
     pub fn prepare_initial_suffixes(&mut self) -> Result<(), ReceiveError> {
         if self.receiver.is_started()

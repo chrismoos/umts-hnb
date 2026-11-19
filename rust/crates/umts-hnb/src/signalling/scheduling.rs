@@ -39,6 +39,7 @@ impl CommonSignalling {
             context.nas_bearer.tick(now).map_err(SignallingError::Am)?;
             if self.request_cpich_measurements {
                 reports::request_cpich(context, key, &self.measurement_reporting)?;
+                reports::request_process_allocation(context, key)?;
                 if let Some(target) = self.secondary_cpich_target {
                     reports::request_secondary_cpich(
                         context,

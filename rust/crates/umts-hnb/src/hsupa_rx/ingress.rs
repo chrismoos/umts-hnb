@@ -12,6 +12,9 @@ use crate::{
 use std::num::NonZeroUsize;
 use umts_types::time::ChipInstant;
 
+// Must stay below the block size sent at the lowest grant the quality loop reaches, or a cut grant
+// could not recover.
+const GRADED_ETFCI: u8 = 16;
 const MAX_FEEDBACK: usize = 64;
 const RSN_STATES: usize = 4;
 
@@ -76,6 +79,8 @@ pub struct IngressCounters {
     /// Reset reasons indexed by `umts_mac::hsupa::ResetReason::index`.
     pub reset_reasons: [u64; umts_mac::hsupa::ResetReason::COUNT],
     pub failed_by_rsn: [u64; RSN_STATES],
+    pub graded_first_decoded: u64,
+    pub graded_first_failed: u64,
     pub decoded: u64,
     pub invalid_crc: u64,
     pub erased: u64,
@@ -104,6 +109,9 @@ pub struct GrantActivity {
     pub scheduling: Option<SchedulingReport>,
     pub happy: Option<(ChipInstant, bool)>,
     pub unhappy_streak: u32,
+    pub first_decoded: u64,
+    pub first_failed: u64,
+    pub payload_bits: u64,
 }
 
 impl IngressCounters {
@@ -264,6 +272,9 @@ impl Ingress {
             scheduling: self.counters.last_scheduling,
             happy: self.counters.last_happy,
             unhappy_streak: self.counters.unhappy_streak,
+            first_decoded: self.counters.graded_first_decoded,
+            first_failed: self.counters.graded_first_failed,
+            payload_bits: self.counters.decoded_payload_bits,
         }
     }
     pub fn packets(&mut self) -> &mut PacketDelivery {
@@ -302,6 +313,7 @@ impl Ingress {
             || transmit.epoch() != now.epoch
             || self.now.is_some_and(|old| old.index > now.index)
         {
+            tracing::debug!(now = ?now, previous = ?self.now, next_transmit = ?next_transmit, "HSUPA ingress clock rejected");
             return Err(IngressError::Time);
         }
         self.now = Some(now);
@@ -320,18 +332,35 @@ impl Ingress {
         if report.identity != self.settings.identity {
             return Err(IngressError::Identity);
         }
+        let end = report
+            .start
+            .index
+            .checked_add(self.inputs.association.interval().chips());
         if report.start.epoch != now.epoch
             || report.start.index < self.settings.activation.index
-            || report
-                .start
-                .index
-                .checked_add(self.inputs.association.interval().chips())
-                .is_none_or(|end| end > now.index)
+            || end.is_none()
             || self
                 .last_released
                 .is_some_and(|last| report.absolute_tti <= last)
         {
+            tracing::debug!(
+                ue = ?report.identity.ue,
+                start = report.start.index,
+                now = now.index,
+                activation = self.settings.activation.index,
+                tti = report.absolute_tti,
+                released = ?self.last_released,
+                "HSUPA ingress report rejected"
+            );
             return Err(IngressError::Time);
+        }
+        // The pass time is a lower bound on the radio clock and can trail a report decoded since it was read.
+        if end.is_some_and(|end| end > now.index) {
+            return Ok(IngressStep {
+                progress: IngressProgress::Idle,
+                report: None,
+                packet: None,
+            });
         }
         let step = |progress, packet| IngressStep {
             progress,
@@ -431,12 +460,21 @@ impl Ingress {
             let slot = &mut self.counters.reset_reasons[reason.index()];
             *slot = slot.saturating_add(1);
         }
+        let graded = rsn == 0 && report.control.information.format.value() >= GRADED_ETFCI;
         if report.outcome == BlockOutcome::Decoded {
             self.counters.last_decoded = Some(report);
             self.counters.decoded_by_rsn[rsn] = self.counters.decoded_by_rsn[rsn].saturating_add(1);
+            if graded {
+                self.counters.graded_first_decoded =
+                    self.counters.graded_first_decoded.saturating_add(1);
+            }
         } else {
             self.counters.last_failed = Some(report);
             self.counters.failed_by_rsn[rsn] = self.counters.failed_by_rsn[rsn].saturating_add(1);
+            if graded {
+                self.counters.graded_first_failed =
+                    self.counters.graded_first_failed.saturating_add(1);
+            }
         }
         let outcome = match report.outcome {
             BlockOutcome::Decoded => &mut self.counters.decoded,

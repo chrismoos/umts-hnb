@@ -264,3 +264,59 @@ fn single_uplink_activation_and_restoration_retain_dual_downlink() {
         assert!(restored.dl_hspdsch_information.is_none());
     }
 }
+
+#[test]
+fn process_allocation_keeps_the_secondary_cell() {
+    use crate::hsupa::UplinkActivation;
+    let transaction = TransactionId::new(1).unwrap();
+    let single = UplinkActivation::Coexistence(evolved(false));
+    let message = single.process_allocation(transaction, 0x55).unwrap();
+    let class::DLDCCHMessageType::physicalChannelReconfiguration(
+        pdu::PhysicalChannelReconfiguration::later_than_r3(value),
+    ) = message.message
+    else {
+        panic!("reconfiguration")
+    };
+    let pdu::PhysicalChannelReconfigurationLaterThanR3CriticalExtensions::criticalExtensions(value) =
+        value.critical_extensions
+    else {
+        panic!("r4")
+    };
+    let pdu::PhysicalChannelReconfigurationLaterThanR3CriticalExtensionsCriticalExtensions::criticalExtensions(value) = value else { panic!("r5") };
+    assert!(matches!(value, pdu::PhysicalChannelReconfigurationLaterThanR3CriticalExtensionsCriticalExtensionsCriticalExtensions::r6(_)));
+
+    let dual = single.with_secondary_cell(true).unwrap();
+    let message = dual.process_allocation(transaction, 0x55).unwrap();
+    let class::DLDCCHMessageType::physicalChannelReconfiguration(
+        pdu::PhysicalChannelReconfiguration::later_than_r3(value),
+    ) = message.message
+    else {
+        panic!("reconfiguration")
+    };
+    let pdu::PhysicalChannelReconfigurationLaterThanR3CriticalExtensions::criticalExtensions(value) =
+        value.critical_extensions
+    else {
+        panic!("r4")
+    };
+    let pdu::PhysicalChannelReconfigurationLaterThanR3CriticalExtensionsCriticalExtensions::criticalExtensions(value) = value else { panic!("r5") };
+    let pdu::PhysicalChannelReconfigurationLaterThanR3CriticalExtensionsCriticalExtensionsCriticalExtensions::criticalExtensions(value) = value else { panic!("r6") };
+    let pdu::PhysicalChannelReconfigurationLaterThanR3CriticalExtensionsCriticalExtensionsCriticalExtensionsCriticalExtensions::criticalExtensions(value) = value else { panic!("r7") };
+    let pdu::PhysicalChannelReconfigurationLaterThanR3CriticalExtensionsCriticalExtensionsCriticalExtensionsCriticalExtensionsCriticalExtensions::r8(value) = value else { panic!("r8") };
+    let body = value.physical_channel_reconfiguration_r8;
+    assert!(matches!(
+        body.dl_secondary_cell_info_fdd,
+        Some(ie::DLSecondaryCellInfoFDD::R_continue(()))
+    ));
+    assert!(body.activation_time.is_none());
+    let ie::ULEDCHInformationR8ModeSpecificInfo::fdd(uplink) =
+        body.ul_edch_information.unwrap().mode_specific_info
+    else {
+        panic!("FDD")
+    };
+    let allocation = uplink
+        .scheduling_transm_configuration
+        .unwrap()
+        .ms2_sched_transm_grant_harqalloc
+        .unwrap();
+    assert_eq!(allocation.as_raw_slice(), [0x55u8.reverse_bits()]);
+}

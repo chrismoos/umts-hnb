@@ -5,6 +5,7 @@ use umts_dsp::bits::Bit;
 use umts_types::time::{CHIPS_PER_SLOT, ChipInstant};
 
 pub(crate) const ESTIMATE_SLOTS: usize = 64;
+const FAR_ABOVE_TARGET: f64 = 6.3;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TpcEstimate {
@@ -60,6 +61,9 @@ impl TpcEstimate {
     }
     pub fn sir_linear(self) -> f64 {
         self.sir_linear
+    }
+    pub fn far_above_target(self) -> bool {
+        self.sir_linear >= self.target_linear * FAR_ABOVE_TARGET
     }
     // TS 25.214 5.1.2.2.1. The estimate is held only within its original validity interval.
     pub fn command(self) -> Bit {

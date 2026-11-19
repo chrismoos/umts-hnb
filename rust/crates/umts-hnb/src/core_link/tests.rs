@@ -879,6 +879,27 @@ fn iu_release_retains_reopening_nas_until_core_completion() {
         radio.notify_owned_connection_release(request),
         Ok(ConnectionReleaseProgress::Complete)
     );
+    let released = umts_rrc::nas::CoreConnection {
+        key: umts_types::ConnectionKey {
+            ue: key,
+            domain: CnDomain::Cs,
+        },
+        context: CoreContextId::new(context.get()).unwrap(),
+    };
+    let queued = radio.core().len();
+    assert_eq!(
+        radio.core().push_nas(
+            CoreNas {
+                connection: released,
+                kind: CoreNasKind::Direct,
+                initial: None,
+                nas: &[1],
+            },
+            false,
+        ),
+        Ok(())
+    );
+    assert_eq!(radio.core().len(), queued);
     send(&mut radio, key, SignallingBearer::NasAm, &mut ue, &INITIAL);
     assert_eq!(radio.process_one(), Some(Err(SignallingError::Capacity)));
     assert_eq!(radio.connection(key, CnDomain::Cs), None);

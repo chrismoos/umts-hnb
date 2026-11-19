@@ -114,6 +114,14 @@ fn run(args: Args, logging: &umts_runtime::logging::Logging) -> Result<()> {
             println!("Config is okay.");
             return Ok(());
         }
+        let mut decode_worker = if config.hspa.uplink.enabled {
+            Some(
+                crate::hsupa_rx::decode::Worker::start(config.runtime.maximum_ues)
+                    .context("start HSUPA decoder")?,
+            )
+        } else {
+            None
+        };
         tracing::info!(
             "UMTS serving: epoch={} downlink_hz={} uplink_hz={} core={} tx_gain_db={} rx_gain_db={} tx_batch_slots={}",
             description.epoch.get(),
@@ -152,6 +160,16 @@ fn run(args: Args, logging: &umts_runtime::logging::Logging) -> Result<()> {
                 }
                 if stopping(&management) {
                     return Ok(());
+                }
+                if decode_worker
+                    .as_ref()
+                    .is_some_and(crate::hsupa_rx::decode::Worker::failed)
+                {
+                    drop(decode_worker.take());
+                    decode_worker = Some(
+                        crate::hsupa_rx::decode::Worker::start(config.runtime.maximum_ues)
+                            .context("restart HSUPA decoder")?,
+                    );
                 }
                 let epoch = prepared.description().epoch.get();
                 let mut runtime = match prepared.open_with_cancellation(|| {
@@ -232,6 +250,12 @@ fn run(args: Args, logging: &umts_runtime::logging::Logging) -> Result<()> {
                             }
                         }
                         let now = Instant::now();
+                        if decode_worker
+                            .as_ref()
+                            .is_some_and(crate::hsupa_rx::decode::Worker::failed)
+                        {
+                            bail!("HSUPA decoder worker stopped unexpectedly");
+                        }
 
                         runtime.step(now).map_err(|error| {
                             anyhow!(
@@ -250,12 +274,31 @@ fn run(args: Args, logging: &umts_runtime::logging::Logging) -> Result<()> {
                         }
                         if now.duration_since(last_report) >= STATUS_REPORT_INTERVAL {
                             if let Some(management) = &mut management {
-                                management.update(runtime.management_snapshot());
+                                let mut snapshot = runtime.management_snapshot();
+                                if let Some(worker) = &decode_worker {
+                                    let counts = worker.counters();
+                                    let values = &mut snapshot
+                                        .status
+                                        .counters
+                                        .get_or_insert_default()
+                                        .values;
+                                    for (name, value) in [
+                                        ("hsupa.decoder.state_updates", counts.state_updates),
+                                        ("hsupa.decoder.completed_jobs", counts.completed),
+                                        ("hsupa.decoder.cancelled_jobs", counts.cancelled),
+                                    ] {
+                                        values.push(umts_management::proto::Counter {
+                                            name: name.into(),
+                                            value,
+                                        });
+                                    }
+                                }
+                                management.update(snapshot);
                             }
                             if let Some(management) = &mut management
                                 && let Err(error) =
                                     runtime.service_receive_diagnostics(|identity, status| {
-                                        management.receive(identity, &status);
+                                        management.receive(identity, status);
                                     })
                             {
                                 tracing::warn!("Receive diagnostics unavailable: {error:?}");

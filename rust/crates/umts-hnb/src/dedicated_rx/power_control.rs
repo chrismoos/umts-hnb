@@ -94,6 +94,154 @@ pub struct PilotTpcController {
     identity: ReceiveIdentity,
     settings: PilotTpcSettings,
     previous: Option<PilotObservationKey>,
+    noise: Option<f64>,
+    actual_sir: Option<f64>,
+    frame_disturbance: f64,
+    frame_slots: u32,
+    settled_frames: u32,
+    margin: f64,
+    quality_signal: f64,
+    quality_disturbance: f64,
+    quality_slots: u32,
+    quality_rejected: u32,
+    diagnostic: FrameDiagnostic,
+}
+
+const NOISE_FALL: f64 = 1.0 / 8.0;
+const NOISE_RISE_PER_SLOT: f64 = 1.000_002_56;
+const ACTUAL_SIR_SMOOTHING: f64 = 1.0 / 16.0;
+const MINIMUM_ACTUAL_SIR: f64 = 1.0;
+const SWAMPED_PILOT_LIMIT: f64 = 10.0;
+const INTERFERED_PILOT_LIMIT: f64 = 2.5;
+static EDCH_SLOTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(not(test))]
+static CELL_FLOOR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(test)]
+thread_local! {
+    static CELL_FLOOR: std::sync::atomic::AtomicU64 = const { std::sync::atomic::AtomicU64::new(0) };
+}
+
+fn with_cell_floor<R>(action: impl FnOnce(&std::sync::atomic::AtomicU64) -> R) -> R {
+    #[cfg(not(test))]
+    return action(&CELL_FLOOR);
+    #[cfg(test)]
+    return CELL_FLOOR.with(action);
+}
+
+fn cell_floor(disturbance: f64) -> f64 {
+    use std::sync::atomic::Ordering;
+    let stored = f64::from_bits(with_cell_floor(|floor| floor.load(Ordering::Relaxed)));
+    let floor = if !(stored.is_finite() && stored > 0.0) {
+        disturbance
+    } else if disturbance < stored {
+        stored + (disturbance - stored) * NOISE_FALL
+    } else {
+        stored * NOISE_RISE_PER_SLOT
+    };
+    with_cell_floor(|cell| cell.store(floor.to_bits(), Ordering::Relaxed));
+    floor
+}
+
+#[cfg(not(test))]
+static PILOT_NOISE_RATIO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(test)]
+thread_local! {
+    static PILOT_NOISE_RATIO: std::sync::atomic::AtomicU64 = const { std::sync::atomic::AtomicU64::new(0) };
+}
+
+fn with_ratio<R>(action: impl FnOnce(&std::sync::atomic::AtomicU64) -> R) -> R {
+    #[cfg(not(test))]
+    return action(&PILOT_NOISE_RATIO);
+    #[cfg(test)]
+    return PILOT_NOISE_RATIO.with(action);
+}
+const RATIO_SETTLING_FRAMES: u32 = 100;
+const RATIO_FRAME_SLOTS: u32 = 15;
+const QUIET_RATIO_FALL: f64 = 1.0 / 4.0;
+const QUIET_RATIO_RISE_PER_FRAME: f64 = 1.000_001;
+const MEASURED_FLOOR_OFFSET: f64 = 5.0;
+const MEASURED_INTERFERED_PILOT_LIMIT: f64 = 1.9;
+const MAXIMUM_INTERFERED_PILOT_LIMIT: f64 = 6.3;
+const MARGIN_RAISE_SIR: f64 = 1.6;
+const MARGIN_LOWER_SIR: f64 = 2.5;
+const MARGIN_RAISE_REJECTED_SLOTS: u32 = 3;
+const MARGIN_RAISE_PER_FRAME: f64 = 1.023;
+const MARGIN_LOWER_PER_FRAME: f64 = 1.0023;
+
+fn adapt_margin(margin: f64, frame_sir: f64, rejected: u32) -> f64 {
+    let next = if rejected >= MARGIN_RAISE_REJECTED_SLOTS || frame_sir < MARGIN_RAISE_SIR {
+        margin * MARGIN_RAISE_PER_FRAME
+    } else if frame_sir > MARGIN_LOWER_SIR {
+        margin / MARGIN_LOWER_PER_FRAME
+    } else {
+        margin
+    };
+    next.clamp(
+        MEASURED_INTERFERED_PILOT_LIMIT,
+        MAXIMUM_INTERFERED_PILOT_LIMIT,
+    )
+}
+
+fn pilot_noise_ratio() -> Option<f64> {
+    let value = f64::from_bits(with_ratio(|ratio| {
+        ratio.load(std::sync::atomic::Ordering::Relaxed)
+    }));
+    (value.is_finite() && value > 0.0).then_some(value)
+}
+
+fn track_quiet_ratio(current: Option<f64>, ratio: f64) -> f64 {
+    match current {
+        _ if !(ratio.is_finite() && ratio > 0.0) => current.unwrap_or(0.0),
+        Some(level) if ratio < level => level + (ratio - level) * QUIET_RATIO_FALL,
+        Some(level) => level * QUIET_RATIO_RISE_PER_FRAME,
+        None => ratio,
+    }
+}
+
+pub(crate) fn set_edch_slots(slots: u64) {
+    EDCH_SLOTS.store(slots, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct FrameDiagnostic {
+    signal: f64,
+    disturbance: f64,
+    accepted: u32,
+    rejected: u32,
+    up: u32,
+    edch: bool,
+}
+
+impl FrameDiagnostic {
+    fn emit(&mut self, identity: ReceiveIdentity, noise: Option<f64>, target: f64, margin: f64) {
+        const SLOTS: u32 = 15;
+        if self.accepted + self.rejected < SLOTS {
+            return;
+        }
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let decibels = |value: f64| 10.0 * value.max(1e-30).log10();
+            let count = f64::from(self.accepted.max(1));
+            tracing::debug!(
+                "Uplink pilot frame: slot={} configuration={} signal_db={:.1} disturbance_db={:.1} noise_db={:.1} target_db={:.1} accepted={} rejected={} up={} edch={} strip_db={:.1} received_db={:.1} rot_db={:.1} margin_db={:.1}",
+                identity.ue.slot,
+                identity.configuration,
+                decibels(self.signal / count),
+                decibels(self.disturbance / count),
+                decibels(noise.unwrap_or(0.0)),
+                decibels(target),
+                self.accepted,
+                self.rejected,
+                self.up,
+                self.edch,
+                decibels(crate::uplink_noise::strip_noise().unwrap_or(0.0)),
+                decibels(crate::uplink_noise::received_power().unwrap_or(0.0)),
+                decibels(crate::uplink_noise::rise_over_thermal().unwrap_or(1.0)),
+                decibels(margin),
+            );
+        }
+        *self = Self::default();
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -117,11 +265,61 @@ impl PilotTpcController {
         settings: PilotTpcSettings,
     ) -> Result<Self, PowerControlError> {
         validate_settings(identity, settings)?;
+        #[cfg(test)]
+        {
+            with_cell_floor(|floor| floor.store(0, std::sync::atomic::Ordering::Relaxed));
+            with_ratio(|ratio| ratio.store(0, std::sync::atomic::Ordering::Relaxed));
+        }
         Ok(Self {
             identity,
             settings,
             previous: None,
+            noise: None,
+            actual_sir: None,
+            frame_disturbance: 0.0,
+            frame_slots: 0,
+            settled_frames: 0,
+            margin: MEASURED_INTERFERED_PILOT_LIMIT,
+            quality_signal: 0.0,
+            quality_disturbance: 0.0,
+            quality_slots: 0,
+            quality_rejected: 0,
+            diagnostic: FrameDiagnostic::default(),
         })
+    }
+
+    fn adapt_frame_margin(&mut self) {
+        if self.quality_slots + self.quality_rejected < RATIO_FRAME_SLOTS {
+            return;
+        }
+        let sir = if self.quality_slots == 0 {
+            0.0
+        } else {
+            self.quality_signal / self.quality_disturbance
+        };
+        self.margin = adapt_margin(self.margin, sir, self.quality_rejected);
+        self.quality_signal = 0.0;
+        self.quality_disturbance = 0.0;
+        self.quality_slots = 0;
+        self.quality_rejected = 0;
+    }
+
+    fn measured_floor(&mut self, disturbance: f64) -> Option<f64> {
+        let strip = crate::uplink_noise::strip_noise()?;
+        self.frame_disturbance += disturbance;
+        self.frame_slots += 1;
+        if self.frame_slots == RATIO_FRAME_SLOTS {
+            let ratio = self.frame_disturbance / f64::from(RATIO_FRAME_SLOTS) / strip;
+            self.frame_disturbance = 0.0;
+            self.frame_slots = 0;
+            if self.settled_frames < RATIO_SETTLING_FRAMES {
+                self.settled_frames += 1;
+            } else {
+                let next = track_quiet_ratio(pilot_noise_ratio(), ratio);
+                with_ratio(|cell| cell.store(next.to_bits(), std::sync::atomic::Ordering::Relaxed));
+            }
+        }
+        Some(strip * pilot_noise_ratio()? / MEASURED_FLOOR_OFFSET)
     }
 
     pub fn observe(
@@ -149,11 +347,81 @@ impl PilotTpcController {
                 return Err(PowerControlError::Time);
             }
         }
-        let sir_linear = pilot_sir(
+        let (signal, disturbance) = match pilot_powers(
             observation.pilot,
             observation.pilot_count,
             self.settings.minimum_coherent_fraction,
-        )?;
+        ) {
+            Ok(powers) => powers,
+            Err(error) => {
+                self.quality_rejected += 1;
+                self.adapt_frame_margin();
+                self.diagnostic.rejected += 1;
+                self.diagnostic.emit(
+                    self.identity,
+                    self.noise,
+                    self.settings.target.linear,
+                    self.margin,
+                );
+                return Err(error);
+            }
+        };
+        let slot = self.identity.ue.slot;
+        let has_edch =
+            slot < 64 && EDCH_SLOTS.load(std::sync::atomic::Ordering::Relaxed) & (1 << slot) != 0;
+        let noise = match self.noise {
+            Some(level) if disturbance < level => level + (disturbance - level) * NOISE_FALL,
+            Some(level) => level * NOISE_RISE_PER_SLOT,
+            None => disturbance,
+        };
+        self.noise = Some(noise);
+        let shared = cell_floor(disturbance);
+        let measured = self.measured_floor(disturbance);
+        let noise = measured.unwrap_or(if has_edch { noise } else { shared });
+        self.quality_signal += signal;
+        self.quality_disturbance += disturbance;
+        self.quality_slots += 1;
+        self.adapt_frame_margin();
+        let interfered_limit = if measured.is_some() {
+            self.margin
+        } else {
+            INTERFERED_PILOT_LIMIT
+        };
+        let actual = signal / disturbance;
+        let actual = self.actual_sir.map_or(actual, |smoothed| {
+            smoothed + (actual - smoothed) * ACTUAL_SIR_SMOOTHING
+        });
+        self.actual_sir = Some(actual);
+        let against_noise = signal / noise;
+        let target = self.settings.target.linear;
+        // A pilot below its own disturbance that still reads far above target is another
+        // handset's burst, so the reading cannot order this handset down.
+        if signal < disturbance && against_noise >= target * SWAMPED_PILOT_LIMIT {
+            self.diagnostic.rejected += 1;
+            self.diagnostic
+                .emit(self.identity, Some(noise), target, self.margin);
+            return Err(PowerControlError::Coherence);
+        }
+        let sir_linear = if !has_edch {
+            (signal / disturbance).max(against_noise / interfered_limit)
+        } else if actual < MINIMUM_ACTUAL_SIR
+            && against_noise >= target
+            && against_noise < target * SWAMPED_PILOT_LIMIT
+        {
+            0.5 * target
+        } else {
+            against_noise
+        };
+        if !sir_linear.is_finite() || sir_linear <= 0.0 {
+            return Err(PowerControlError::InvalidPilot);
+        }
+        self.diagnostic.signal += signal;
+        self.diagnostic.disturbance += disturbance;
+        self.diagnostic.accepted += 1;
+        self.diagnostic.up += u32::from(sir_linear < target);
+        self.diagnostic.edch = has_edch;
+        self.diagnostic
+            .emit(self.identity, Some(noise), target, self.margin);
         let observed_at = ChipInstant {
             epoch: observation.measurement_end.epoch,
             index: observation
@@ -288,11 +556,11 @@ fn validate_observation(
     Ok(())
 }
 
-fn pilot_sir(
+fn pilot_powers(
     pilot: PilotEstimate,
     pilot_count: usize,
     minimum_coherent_fraction: f64,
-) -> Result<f64, PowerControlError> {
+) -> Result<(f64, f64), PowerControlError> {
     if !(MINIMUM_PILOT_COUNT..=MAXIMUM_PILOT_COUNT).contains(&pilot_count) {
         return Err(PowerControlError::InvalidPilot);
     }
@@ -312,10 +580,15 @@ fn pilot_sir(
     }
     let statistics =
         DpcchStatistics::new(pilot, pilot_count).map_err(|_| PowerControlError::InvalidPilot)?;
-    statistics
+    let sir = statistics
         .sir_linear()
         .filter(|value| value.is_finite() && *value > 0.0)
-        .ok_or(PowerControlError::InvalidPilot)
+        .ok_or(PowerControlError::InvalidPilot)?;
+    let disturbance = statistics.disturbance_symbol_power;
+    if !disturbance.is_finite() || disturbance <= 0.0 {
+        return Err(PowerControlError::InvalidPilot);
+    }
+    Ok((sir * disturbance, disturbance))
 }
 
 fn preparation_frontier(
@@ -437,10 +710,97 @@ mod tests {
     }
 
     #[test]
+    fn swamped_pilot_far_above_target_is_not_a_down_command() {
+        crate::uplink_noise::set_strip_noise_for_test(None);
+        let mut settings = settings(0.0);
+        settings.minimum_coherent_fraction = 0.01;
+        let mut controller = PilotTpcController::new(identity(), settings).unwrap();
+        assert_eq!(
+            controller
+                .observe(observation(0, 1.0, 0.001))
+                .unwrap()
+                .estimate
+                .command(),
+            Bit::Zero
+        );
+        assert_eq!(
+            controller.observe(observation(2560, 100.0, 60.0)).err(),
+            Some(PowerControlError::Coherence)
+        );
+        assert_eq!(
+            controller
+                .observe(observation(5120, 100.0, 0.1))
+                .unwrap()
+                .estimate
+                .command(),
+            Bit::Zero
+        );
+    }
+
+    #[test]
+    fn measured_floor_follows_strip_noise_and_not_traffic() {
+        let mut controller = PilotTpcController::new(identity(), settings(13.0)).unwrap();
+        crate::uplink_noise::set_strip_noise_for_test(None);
+        assert_eq!(controller.measured_floor(0.01), None);
+        crate::uplink_noise::set_strip_noise_for_test(Some(1.0));
+        let frames = |controller: &mut PilotTpcController, count: u32, disturbance: f64| {
+            let mut floor = None;
+            for _ in 0..count * RATIO_FRAME_SLOTS {
+                floor = controller.measured_floor(disturbance);
+            }
+            floor
+        };
+        assert_eq!(frames(&mut controller, RATIO_SETTLING_FRAMES, 0.1), None);
+        let quiet = frames(&mut controller, 1, 0.01).unwrap();
+        assert!((quiet / (0.01 / MEASURED_FLOOR_OFFSET) - 1.0).abs() < 1e-9);
+        let loaded = frames(&mut controller, 5_000, 0.1).unwrap();
+        assert!((loaded / quiet - 1.0).abs() < 0.01);
+        crate::uplink_noise::set_strip_noise_for_test(Some(4.0));
+        let raised = controller.measured_floor(0.4).unwrap();
+        assert!((raised / (4.0 * loaded) - 1.0).abs() < 1e-6);
+        crate::uplink_noise::set_strip_noise_for_test(None);
+    }
+
+    #[test]
+    fn margin_rises_fast_on_poor_frames_and_returns_slowly_within_bounds() {
+        let base = MEASURED_INTERFERED_PILOT_LIMIT;
+        assert_eq!(adapt_margin(base, 10.0, 0), base);
+        assert_eq!(adapt_margin(base, 2.0, 0), base);
+        let mut margin = base;
+        for _ in 0..100 {
+            margin = adapt_margin(margin, 1.0, 0);
+        }
+        assert_eq!(margin, MAXIMUM_INTERFERED_PILOT_LIMIT);
+        assert!(adapt_margin(base, 10.0, MARGIN_RAISE_REJECTED_SLOTS) > base);
+        assert_eq!(adapt_margin(margin, 2.0, 0), margin);
+        let mut frames = 0;
+        while margin > base {
+            margin = adapt_margin(margin, 10.0, 0);
+            frames += 1;
+        }
+        assert!((300..1000).contains(&frames), "{frames}");
+    }
+
+    #[test]
+    fn quiet_ratio_keeps_the_lowest_frames_and_ignores_load() {
+        let mut ratio = track_quiet_ratio(None, 4.0);
+        assert_eq!(ratio, 4.0);
+        for _ in 0..10_000 {
+            ratio = track_quiet_ratio(Some(ratio), 40.0);
+        }
+        assert!(ratio < 4.0 * 1.02);
+        for _ in 0..20 {
+            ratio = track_quiet_ratio(Some(ratio), 1.0);
+        }
+        assert!((ratio - 1.0).abs() < 0.02);
+        assert_eq!(track_quiet_ratio(Some(ratio), f64::NAN), ratio);
+    }
+
+    #[test]
     fn pilot_sir_is_common_gain_invariant() {
         let mut first = PilotTpcController::new(identity(), settings(0.0)).unwrap();
-        let mut second = PilotTpcController::new(identity(), settings(0.0)).unwrap();
         let a = first.observe(observation(0, 2.0, 0.1)).unwrap();
+        let mut second = PilotTpcController::new(identity(), settings(0.0)).unwrap();
         let b = second.observe(observation(0, 200.0, 10.0)).unwrap();
         assert!((a.estimate.sir_linear() - b.estimate.sir_linear()).abs() < 1e-12);
         assert_eq!(a.estimate.command(), b.estimate.command());

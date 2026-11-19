@@ -455,6 +455,7 @@ mod tests {
         };
         let bits = [Bit::One, Bit::Zero, Bit::One];
         let decoded = || DecodedTti {
+            transport_bits: 18,
             timing: None,
             identity,
             start: ChipInstant {

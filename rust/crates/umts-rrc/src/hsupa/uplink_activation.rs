@@ -32,6 +32,19 @@ impl UplinkActivation {
         Ok(self)
     }
 
+    pub fn process_allocation(
+        &self,
+        transaction: TransactionId,
+        processes: u8,
+    ) -> Result<class::DLDCCHMessage, DedicatedError> {
+        super::activation::process_allocation_message(
+            self.parameters(),
+            transaction,
+            processes,
+            self.secondary_cell_active(),
+        )
+    }
+
     pub fn secondary_cell_active(&self) -> bool {
         match self {
             Self::Coexistence(value) => value.secondary_cell_active,

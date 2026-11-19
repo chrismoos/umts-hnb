@@ -192,10 +192,37 @@ pub(super) fn physical(
     activation: ScheduledActivation,
     secondary: SecondaryCellUpdate<'_>,
 ) -> Result<EncodedRrc, DedicatedError> {
+    let value = physical_message(
+        transaction,
+        Some(ie::ActivationTime(activation.cfn())),
+        None,
+        secondary,
+    );
+    encode_downlink_dedicated(&value).map_err(DedicatedError::Codec)
+}
+
+pub(crate) fn process_allocation(
+    transaction: TransactionId,
+    uplink: ie::ULEDCHInformationR7,
+) -> Result<class::DLDCCHMessage, DedicatedError> {
+    Ok(physical_message(
+        transaction,
+        None,
+        Some(edch(uplink)?),
+        SecondaryCellUpdate::Continue,
+    ))
+}
+
+fn physical_message(
+    transaction: TransactionId,
+    activation_time: Option<ie::ActivationTime>,
+    ul_edch_information: Option<ie::ULEDCHInformationR8>,
+    secondary: SecondaryCellUpdate<'_>,
+) -> class::DLDCCHMessage {
     let body = pdu::PhysicalChannelReconfigurationR8IEs {
         integrity_protection_mode_info: None,
         ciphering_mode_info: None,
-        activation_time: Some(ie::ActivationTime(activation.cfn())),
+        activation_time,
         delay_restriction_flag: None,
         new_u_rnti: None,
         new_c_rnti: None,
@@ -220,7 +247,7 @@ pub(super) fn physical(
         mimo_parameters: None,
         max_allowed_ul_tx_power: None,
         ul_dpch_info: None,
-        ul_edch_information: None,
+        ul_edch_information,
         dl_hspdsch_information: None,
         dl_common_information: None,
         dl_information_per_rl_list: None,
@@ -229,7 +256,7 @@ pub(super) fn physical(
         sps_information_tdd128: None,
         mbms_pl_service_restrict_info: None,
     };
-    let value = class::DLDCCHMessage::new(None, class::DLDCCHMessageType::physicalChannelReconfiguration(
+    class::DLDCCHMessage::new(None, class::DLDCCHMessageType::physicalChannelReconfiguration(
         pdu::PhysicalChannelReconfiguration::later_than_r3(pdu::PhysicalChannelReconfigurationLaterThanR3::new(
             ie::RRCTransactionIdentifier(transaction.get()),
             pdu::PhysicalChannelReconfigurationLaterThanR3CriticalExtensions::criticalExtensions(
@@ -244,6 +271,5 @@ pub(super) fn physical(
                 ),
             ),
         )),
-    ));
-    encode_downlink_dedicated(&value).map_err(DedicatedError::Codec)
+    ))
 }

@@ -24,6 +24,8 @@ fn edch_requires_first_attempt_and_signal_support_for_both_crc_outcomes() {
             let mut observation = UplinkDecodeObservation::Edch {
                 identity: identity(1),
                 start: at(10),
+                transport_bits: 11_484,
+                scheduling: None,
                 control: ControlDecision {
                     information: ControlInformation {
                         format: Etfci::new(127).unwrap(),
@@ -80,6 +82,8 @@ fn observation(configuration: u64, index: u64, passed: usize, failed: usize) -> 
         start: at(index),
         stream: CrcStream::Dch(NonZeroU8::new(1).unwrap()),
         crc_counts: CrcCounts { passed, failed },
+        edch_transport_bits: None,
+        scheduling: None,
         eligibility: CrcEligibility::AirLink,
     }
 }
@@ -135,4 +139,115 @@ fn replacement_preserves_target_and_rejects_out_of_window_results() {
     assert_eq!(registry.status(identity(2)).unwrap().target.db(), 17.5);
     registry.retire(identity(2)).unwrap();
     assert!(registry.status(identity(2)).is_err());
+}
+
+fn edch_observation(index: u64, bits: usize, failed: usize) -> LinkCrcObservation {
+    let mut result = observation(1, index, usize::from(failed == 0), failed);
+    result.stream = CrcStream::Edch;
+    result.edch_transport_bits = Some(bits);
+    result
+}
+
+#[test]
+fn small_edch_releases_bulk_target_and_bulk_restores_initial_margin() {
+    let settings = OuterLoopSettings::new(6.0, 9.0, 13.0, 0.02).unwrap();
+    let mut controller = LinkOuterLoop::new(identity(1).ue, settings).unwrap();
+    controller.observe(edch_observation(1, 256, 1)).unwrap();
+    assert_eq!(controller.status().target.db(), 6.0);
+    controller.observe(edch_observation(2, 11_484, 1)).unwrap();
+    assert_eq!(controller.status().target.db(), 9.25);
+    controller.observe(edch_observation(3, 18, 1)).unwrap();
+    assert_eq!(controller.status().target.db(), 9.25);
+    controller
+        .observe(edch_observation(LOAD_MEMORY_CHIPS + 3, 1015, 0))
+        .unwrap();
+    assert_eq!(controller.status().target.db(), 6.0);
+}
+
+#[test]
+fn small_edch_does_not_override_recent_dch_or_voice_error_control() {
+    let settings = OuterLoopSettings::new(6.0, 9.0, 13.0, 0.02).unwrap();
+    let mut controller = LinkOuterLoop::new(identity(1).ue, settings).unwrap();
+    controller.observe(observation(1, 1, 0, 1)).unwrap();
+    assert_eq!(controller.status().target.db(), 9.25);
+    controller.observe(edch_observation(2, 256, 1)).unwrap();
+    assert_eq!(controller.status().target.db(), 9.5);
+    controller
+        .observe(edch_observation(LOAD_MEMORY_CHIPS + 2, 256, 0))
+        .unwrap();
+    assert_eq!(controller.status().target.db(), 6.0);
+}
+
+#[test]
+fn excluded_and_stale_small_edch_do_not_lower_target() {
+    let settings = OuterLoopSettings::new(6.0, 9.0, 13.0, 0.02).unwrap();
+    let mut controller = LinkOuterLoop::new(identity(1).ue, settings).unwrap();
+    let mut excluded = edch_observation(10, 18, 1);
+    excluded.eligibility = CrcEligibility::LocalLoss;
+    controller.observe(excluded).unwrap();
+    controller.observe(edch_observation(9, 18, 1)).unwrap();
+    assert_eq!(controller.status().target.db(), 9.0);
+}
+
+#[test]
+fn fresh_backlog_preserves_bulk_margin_even_when_only_small_blocks_decode() {
+    let settings = OuterLoopSettings::new(6.0, 9.0, 13.0, 0.02).unwrap();
+    let mut controller = LinkOuterLoop::new(identity(1).ue, settings).unwrap();
+    controller.observe(edch_observation(1, 18, 0)).unwrap();
+    assert_eq!(controller.status().target.db(), 6.0);
+    let mut report = edch_observation(2, 18, 0);
+    report.scheduling = Some(umts_mac::hsupa::scheduling::SchedulingInformation {
+        power_headroom_index: 31,
+        total_buffer_index: 31,
+        priority_buffer_index: 15,
+        highest_priority_logical_channel: 4,
+    });
+    controller.observe(report).unwrap();
+    assert_eq!(controller.status().target.db(), 9.0);
+    controller
+        .observe(edch_observation(LOAD_MEMORY_CHIPS + 3, 256, 1))
+        .unwrap();
+    assert_eq!(controller.status().target.db(), 9.0);
+    controller
+        .observe(edch_observation(
+            SCHEDULING_MEMORY_CHIPS + LOAD_MEMORY_CHIPS + 4,
+            18,
+            0,
+        ))
+        .unwrap();
+    assert_eq!(controller.status().target.db(), 6.0);
+}
+
+#[test]
+fn cleared_buffer_allows_target_to_return_to_floor_after_bulk_hold() {
+    let settings = OuterLoopSettings::new(6.0, 9.0, 13.0, 0.02).unwrap();
+    let mut controller = LinkOuterLoop::new(identity(1).ue, settings).unwrap();
+    let mut report = edch_observation(1, 18, 0);
+    report.scheduling = Some(umts_mac::hsupa::scheduling::SchedulingInformation {
+        power_headroom_index: 31,
+        total_buffer_index: 31,
+        priority_buffer_index: 15,
+        highest_priority_logical_channel: 4,
+    });
+    controller.observe(report).unwrap();
+    report.start = at(LOAD_MEMORY_CHIPS + 2);
+    report.scheduling.as_mut().unwrap().total_buffer_index = 0;
+    controller.observe(report).unwrap();
+    assert_eq!(controller.status().target.db(), 6.0);
+}
+
+#[test]
+fn failed_scheduling_crc_cannot_claim_a_backlog() {
+    let settings = OuterLoopSettings::new(6.0, 9.0, 13.0, 0.02).unwrap();
+    let mut controller = LinkOuterLoop::new(identity(1).ue, settings).unwrap();
+    let mut report = edch_observation(1, 18, 1);
+    report.scheduling = Some(umts_mac::hsupa::scheduling::SchedulingInformation {
+        power_headroom_index: 31,
+        total_buffer_index: 31,
+        priority_buffer_index: 15,
+        highest_priority_logical_channel: 4,
+    });
+    controller.observe(report).unwrap();
+    assert_eq!(controller.status().target.db(), 6.0);
+    assert_eq!(controller.status().counters.failed, 1);
 }

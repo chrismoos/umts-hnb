@@ -10,6 +10,18 @@ const BASELINE: &str =
     include_str!("../../../../../rust/test-support/fixtures/config/split-baseline.yaml");
 
 #[test]
+fn uplink_sir_ceiling_defaults_match_the_shipped_power_policy() {
+    let loaded = Deployment::parse(DEFAULTS, OPERATOR).unwrap();
+    let fallback: crate::PowerControlUplinkSettings = serde_yaml::from_str("{}").unwrap();
+    assert_eq!(loaded.config.power_control.uplink.sir_ceiling_db, 16.0);
+    assert_eq!(fallback.sir_ceiling_db, 16.0);
+    assert_eq!(
+        crate::PowerControlUplinkSettings::default().sir_ceiling_db,
+        16.0
+    );
+}
+
+#[test]
 fn soapy_operator_does_not_require_native_uhd_arguments() {
     let mut operator: Value = serde_yaml::from_str(OPERATOR).unwrap();
     operator["radio"]
@@ -32,7 +44,7 @@ fn soapy_operator_does_not_require_native_uhd_arguments() {
 fn unified_reference() -> Config {
     let mut reference: Config = serde_yaml::from_str(BASELINE).unwrap();
     reference.rel99.profile = Some(crate::Rel99Profile::Standard);
-    reference.power_control.uplink.sir_ceiling_db = 13.0;
+    reference.power_control.uplink.sir_ceiling_db = 16.0;
     reference.hspa.uplink.initial_serving_grant = Some(31);
     reference.hspa.uplink.serving_grant = 31;
     assert_eq!(
@@ -121,7 +133,7 @@ fn operator_overrides_defaults_and_optional_null_is_preserved() {
     insert(
         &mut operator,
         "power_control.uplink.sir_ceiling_db",
-        Value::from(11),
+        Value::from(15),
     )
     .unwrap();
     insert(
@@ -151,7 +163,7 @@ fn operator_overrides_defaults_and_optional_null_is_preserved() {
     )
     .unwrap();
     assert_eq!(loaded.config.hspa.downlink.feedback.cqi_interval_ms, 4);
-    assert_eq!(loaded.config.power_control.uplink.sir_ceiling_db, 11.0);
+    assert_eq!(loaded.config.power_control.uplink.sir_ceiling_db, 15.0);
     assert_eq!(
         loaded.config.cell.measurements.ue_measurement_report_count,
         None
@@ -234,7 +246,7 @@ fn example_has_documented_b200_radio_and_path_settings() {
     let example = include_str!("../../../../../config/example.yaml");
     let mut loaded = Deployment::parse(DEFAULTS, example).unwrap().config;
     let mut reference = unified_reference();
-    reference.radio.tx_gain_db = 78.0;
+    reference.radio.tx_gain_db = 75.0;
     reference.radio.tx_antenna = Some("TX/RX".into());
     reference.radio.rx_antenna = Some("RX2".into());
     reference.runtime.maximum_ues = 16;

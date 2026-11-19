@@ -8,6 +8,82 @@ const CONTROL_SF: u16 = 128;
 const MAX_DATA_CODES: u8 = 15;
 const MAX_CONTROL_CODES: usize = MAX_DATA_CODES as usize;
 
+// One bit per SF16 code index. HS-SCCH announces the code set every TTI (TS 25.212 4.6), so no
+// handset is reconfigured.
+#[cfg(not(test))]
+static LENT_DATA_CODES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[cfg(test)]
+thread_local! {
+    static LENT_DATA_CODES: std::sync::atomic::AtomicU32 = const { std::sync::atomic::AtomicU32::new(0) };
+}
+
+fn with_lent<R>(action: impl FnOnce(&std::sync::atomic::AtomicU32) -> R) -> R {
+    #[cfg(not(test))]
+    return action(&LENT_DATA_CODES);
+    #[cfg(test)]
+    return LENT_DATA_CODES.with(action);
+}
+
+pub(crate) fn lent_data_codes() -> u32 {
+    with_lent(|lent| lent.load(std::sync::atomic::Ordering::Acquire))
+}
+
+#[cfg(test)]
+pub(crate) fn set_lent_data_codes(mask: u32) {
+    with_lent(|lent| lent.store(mask, std::sync::atomic::Ordering::Release));
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DataCodeLoan {
+    pub(super) code: OvsfCode,
+    pub(super) lent: bool,
+}
+
+impl RadioResources {
+    pub(super) fn lendable(&self) -> Option<OvsfCode> {
+        self.loan.filter(|loan| !loan.lent).map(|loan| loan.code)
+    }
+
+    pub(super) fn lend_for(&mut self, tree: super::ScramblingTree, codes: &[OvsfCode]) {
+        let Some(loan) = self.loan.as_mut() else {
+            return;
+        };
+        if loan.lent
+            || tree != super::ScramblingTree::PRIMARY
+            || !codes.iter().any(|code| code.overlaps(loan.code))
+        {
+            return;
+        }
+        loan.lent = true;
+        self.occupied[leaves(loan.code)].fill(false);
+        with_lent(|lent| {
+            lent.fetch_or(1 << loan.code.index(), std::sync::atomic::Ordering::AcqRel)
+        });
+        tracing::info!(
+            "HS-PDSCH code {} lent to dedicated channels",
+            loan.code.index()
+        );
+    }
+
+    pub(super) fn reclaim_loan(&mut self) {
+        let Some(loan) = self.loan.as_mut() else {
+            return;
+        };
+        if !loan.lent || self.occupied[leaves(loan.code)].iter().any(|used| *used) {
+            return;
+        }
+        loan.lent = false;
+        self.occupied[leaves(loan.code)].fill(true);
+        with_lent(|lent| {
+            lent.fetch_and(
+                !(1 << loan.code.index()),
+                std::sync::atomic::Ordering::AcqRel,
+            )
+        });
+        tracing::info!("HS-PDSCH code {} returned to HSDPA", loan.code.index());
+    }
+}
+
 pub struct SecondaryRadioResources {
     resources: RadioResources,
 }
@@ -24,6 +100,7 @@ impl SecondaryRadioResources {
         let mut resources =
             RadioResources::new(epoch, primary_cell, std::num::NonZeroUsize::MIN, 0..=0)?;
         resources.primary = scrambling_code.index();
+        resources.lends_data_codes = false;
         resources.occupied.fill(false);
         let pilot = OvsfCode::new(256, 0).map_err(|_| Error::Configuration)?;
         resources.occupied[leaves(pilot)].fill(true);
@@ -221,6 +298,14 @@ impl RadioResources {
             self.occupied = occupied;
             self.hsdpa = Some(serial);
             self.next = serial.checked_add(1);
+            if self.lends_data_codes {
+                self.loan = (data_count.get() > 1).then(|| DataCodeLoan {
+                    code: OvsfCode::new(DATA_SF, u16::from(first_data))
+                        .expect("bounded HS-PDSCH allocation"),
+                    lent: false,
+                });
+                with_lent(|lent| lent.store(0, std::sync::atomic::Ordering::Release));
+            }
             return Ok(HsdpaCodeLease {
                 owner: self.owner,
                 serial,
@@ -241,9 +326,13 @@ impl RadioResources {
             });
         }
         for code in lease.codes.codes() {
+            if self.loan.is_some_and(|loan| loan.lent && loan.code == code) {
+                continue;
+            }
             self.occupied[leaves(code)].fill(false);
         }
         self.hsdpa = None;
+        self.loan = None;
         Ok(())
     }
 }

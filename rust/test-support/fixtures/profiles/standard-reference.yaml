@@ -287,13 +287,15 @@ runtime:
     usb_cpu: null
     prepare_cpu: null
     submit_cpu: null
-    receive_cpu: null
+    receive_cpu: performance
     reader_cpu: null
+    decode_cpu: performance
     usb_priority: 90
     submit_priority: 85
     reader_priority: 85
     prepare_priority: 80
     receive_priority: 75
+    decode_priority: 75
   dch_cpu: null
   simd: auto
   media:
@@ -360,7 +362,7 @@ receiver:
   filter_span_chips: 16
   dedicated:
     maximum_shared_bytes: 4194304
-    maximum_sample_bytes: 67108864
+    maximum_sample_bytes: 536870912
     maximum_coded_bits: 8388608
     maximum_output_bytes: 8388608
     maximum_demultiplexed_bits: 8388608
@@ -386,10 +388,10 @@ receiver:
 power_control:
   uplink:
     sir_ceiling_db: 13.0
-    initial_sir_db: 9.0
-    sir_floor_db: 6.0
+    initial_sir_db: 13.0
+    sir_floor_db: 13.0
     target_bler: 0.02
-    tpc_hold_groups: 0
+    tpc_hold_groups: 2
   downlink:
     pich_power_offset_db: -10
     allocation:
@@ -477,7 +479,7 @@ hspa:
     edpcch_power_offset: 5
     edpdch_references:
     - etfci: 11
-      power_offset: 11
+      power_offset: 19
     - etfci: 81
       power_offset: 25
     resources:

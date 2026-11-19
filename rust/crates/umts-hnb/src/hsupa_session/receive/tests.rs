@@ -178,6 +178,19 @@ fn complete_edch_only_catalog_retains_signalling_and_prebuilt_control_resources(
     let prepared_bytes = resources.receiver.retained_bytes().unwrap();
     assert!(resources.receiver.prepare_initial_suffixes().is_err());
     assert_eq!(resources.receiver.retained_bytes().unwrap(), prepared_bytes);
+    assert!(resources.receiver.discard_collection_buffer());
+    let suffix_bytes = resources.receiver.retained_bytes().unwrap();
+    let mut suffix_budget = budget;
+    suffix_budget.maximum_receive_bytes = count(suffix_bytes);
+    let mut suffix_fallback =
+        ReceiveResources::build(configuration.clone(), inputs(&configuration), suffix_budget)
+            .unwrap();
+    assert_eq!(
+        suffix_fallback.receiver.retained_bytes().unwrap(),
+        suffix_bytes
+    );
+    assert!(!suffix_fallback.receiver.discard_collection_buffer());
+    assert!(suffix_fallback.receiver.discard_initial_suffixes());
     assert!(resources.receiver.discard_initial_suffixes());
     let legacy_bytes = resources.receiver.retained_bytes().unwrap();
     let mut tight = budget;
@@ -186,6 +199,7 @@ fn complete_edch_only_catalog_retains_signalling_and_prebuilt_control_resources(
         ReceiveResources::build(configuration.clone(), inputs(&configuration), tight).unwrap();
     assert_eq!(fallback.receiver.retained_bytes().unwrap(), legacy_bytes);
     assert!(!fallback.receiver.discard_initial_suffixes());
+    assert!(!fallback.receiver.discard_collection_buffer());
     assert_eq!(resources.receiver.receiver().maximum_dpdch(), 0);
     assert!(
         resources.receiver.retained_bytes().unwrap()

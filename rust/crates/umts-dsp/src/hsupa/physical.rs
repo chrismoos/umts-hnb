@@ -363,6 +363,71 @@ impl UplinkChannels {
         let channel = self.data.get(channel).ok_or(DspError::InvalidCode)?;
         despread(slot.samples, &channel.signs, channel.quadrature, scratch)
     }
+
+    pub(super) fn data_reference_chips(
+        &self,
+        slot: &SlotEvidence<'_>,
+        gain_ratios: &[f64],
+        scratch: &mut [Complex64],
+        reference: &mut [Complex64],
+    ) -> Result<(), DspError> {
+        self.validate_at(slot.code, slot.start)?;
+        if gain_ratios.len() != self.data.len() || reference.len() != CHIPS_PER_SLOT as usize {
+            return Err(DspError::InvalidLength);
+        }
+        if gain_ratios
+            .iter()
+            .any(|gain| !gain.is_finite() || *gain < 0.0)
+        {
+            return Err(DspError::InvalidAmplitude);
+        }
+        reference.fill(Complex64::default());
+        let mut index = 0;
+        while index < self.data.len() {
+            let channel = &self.data[index];
+            let sf = channel.signs.len();
+            let symbols = scratch
+                .get_mut(..CHIPS_PER_SLOT as usize / sf)
+                .ok_or(DspError::InvalidLength)?;
+            let paired = index.is_multiple_of(2)
+                && self.data.get(index + 1).is_some_and(|next| {
+                    next.signs == channel.signs && next.quadrature != channel.quadrature
+                });
+            despread(slot.samples, &channel.signs, false, symbols)?;
+            let pilot = if paired && gain_ratios[index] == gain_ratios[index + 1] {
+                paired_data_pilot::<true>(symbols, slot.pilot, slot.pilot_count, gain_ratios[index])
+            } else {
+                slot.pilot
+            };
+            let members = if paired { 2 } else { 1 };
+            let span = index..index + members;
+            for (channel, &gain) in self.data[span.clone()].iter().zip(&gain_ratios[span]) {
+                let amplitude = if channel.quadrature {
+                    pilot.channel * Complex64::new(0.0, gain)
+                } else {
+                    pilot.channel * gain
+                };
+                for (symbol, chips) in symbols.iter().zip(reference.chunks_exact_mut(sf)) {
+                    let aligned = *symbol * pilot.channel.conj();
+                    let projection = if channel.quadrature {
+                        aligned.im
+                    } else {
+                        aligned.re
+                    };
+                    let value = if projection < 0.0 {
+                        -amplitude
+                    } else {
+                        amplitude
+                    };
+                    for (chip, sign) in chips.iter_mut().zip(&channel.signs) {
+                        *chip += value * f64::from(*sign);
+                    }
+                }
+            }
+            index += members;
+        }
+        Ok(())
+    }
 }
 
 // Paired equal-gain E-DPDCHs form QPSK. Their fourth moment removes data signs.

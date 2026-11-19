@@ -137,6 +137,25 @@ fn an_expired_measurement_cannot_start_a_new_correction_group() {
 }
 
 #[test]
+fn algorithm2_corrects_every_group_while_far_above_target() {
+    let mut lane = initialization_lane(0, initialization(true, 1, 100));
+    lane.grouped = Some(GroupedTpc::new(2));
+    measured(&mut lane, 0, 64, 100.0);
+    for slot in 0_u64..15 {
+        assert_eq!(command(&mut lane, slot), Ok(Bit::Zero), "slot {slot}");
+    }
+    measured(&mut lane, 15, 79, 20.0);
+    for slot in 15_u64..25 {
+        assert_eq!(
+            command(&mut lane, slot),
+            Ok(Bit::from(slot.is_multiple_of(2))),
+            "slot {slot}"
+        );
+    }
+    assert_eq!(lane.estimates.counters.algorithm2_control_groups, 3);
+}
+
+#[test]
 fn algorithm2_does_not_replace_explicit_command_exhaustion_with_a_hold() {
     let mut lane = initialization_lane(0, initialization(true, 1, 100));
     lane.grouped = Some(GroupedTpc::new(2));

@@ -145,6 +145,76 @@ fn voice_first_release_restores_original_packet_capacity_without_replacing_beare
         .is_err()
     );
 }
+#[test]
+fn voice_release_shrinks_the_channel_only_to_return_a_borrowed_code() {
+    use crate::rel99_planner::tests::{cs_request, reference_transport_limits};
+    let config: umts_config::Config = serde_yaml::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../rust/test-support/fixtures/config/hspa-two-ue.yaml"
+    )))
+    .unwrap();
+    let configured = ConfiguredPolicy::new(&config).unwrap();
+    let limits = reference_transport_limits();
+    let cs = cs_request();
+    let selection = configured
+        .services()
+        .select(&[(CnDomain::Cs, &cs)])
+        .unwrap();
+    let combined = plan_initial(
+        &fixture::retained(),
+        selection.rabs(),
+        &limits,
+        &configured.policy(),
+    )
+    .unwrap();
+    let sf = |plan: &CompiledRel99| plan.configuration().physical().downlink_sf;
+    let smallest = configured
+        .policy()
+        .physical
+        .iter()
+        .map(|physical| physical.downlink_sf)
+        .max()
+        .unwrap();
+    assert!(sf(combined.compiled()) < smallest);
+    let release = || {
+        plan_release_restoring(
+            combined.compiled().clone(),
+            combined.rabs(),
+            &ids(&combined.rabs()[0].bearers),
+            &limits,
+            &configured.policy(),
+        )
+        .unwrap()
+    };
+    crate::radio_resources::set_lent_data_codes(0);
+    assert_eq!(sf(release().compiled()), sf(combined.compiled()));
+    crate::radio_resources::set_lent_data_codes(u32::MAX);
+    let restored = release();
+    crate::radio_resources::set_lent_data_codes(0);
+    assert_eq!(sf(restored.compiled()), smallest);
+    assert_eq!(
+        restored
+            .compiled()
+            .configuration()
+            .physical()
+            .uplink_scrambling,
+        combined
+            .compiled()
+            .configuration()
+            .physical()
+            .uplink_scrambling
+    );
+    let activation = ScheduledActivation::new(at(0), 0, NonZeroU8::new(8).unwrap()).unwrap();
+    ExistingDchRelease::new(
+        combined.compiled().configuration().clone(),
+        restored.compiled().configuration().clone(),
+        activation,
+    )
+    .unwrap()
+    .message(TransactionId::new(0).unwrap())
+    .unwrap();
+}
+
 fn assert_projection(old: &DchTfcs, new: &DchTfcs) {
     let columns: Vec<_> = new
         .transports()

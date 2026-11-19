@@ -498,11 +498,11 @@ impl<T: Transport, D: BoundDatagrams> ServingRuntime<T, D> {
     }
     pub fn service_receive_diagnostics(
         &mut self,
-        visit: impl FnMut(crate::dedicated_rx::ReceiveIdentity, crate::dedicated_rx::ReceivePlanStatus),
+        visit: impl FnMut(crate::dedicated_rx::ReceiveIdentity, &crate::dedicated_rx::ReceivePlanStatus),
     ) -> Result<(), crate::epoch::EpochMutationError> {
         self.epoch.with_controller(|controller, _| {
             if let Some(dedicated) = controller.dedicated_mut() {
-                dedicated.service_receive_diagnostics(visit);
+                dedicated.visit_receive_diagnostics(visit);
             }
         })
     }

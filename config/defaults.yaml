@@ -88,21 +88,25 @@ management:
 runtime:
   scheduling:
     enabled: true
-    # Pins each thread role to one logical CPU ID. null leaves placement unrestricted.
+    # Pins each thread role to a logical CPU ID (Linux) or to `performance`, the fastest
+    # cores. null leaves placement unrestricted.
     # control_cpu covers background and driver I/O threads. usb_cpu covers USB events.
     # prepare/submit handle TX. receive processes RX. reader reads radio samples.
+    # decode runs unfinished uplink decoding.
     main_cpu: null
     control_cpu: null
     usb_cpu: null
     prepare_cpu: null
     submit_cpu: null
-    receive_cpu: null
+    receive_cpu: performance
     reader_cpu: null
+    decode_cpu: performance
     usb_priority: 90
     submit_priority: 85
     reader_priority: 85
     prepare_priority: 80
     receive_priority: 75
+    decode_priority: 75
   dch_cpu: null
   simd: auto
   media:
@@ -179,7 +183,7 @@ receiver:
   filter_span_chips: 16
   dedicated:
     maximum_shared_bytes: 4194304
-    maximum_sample_bytes: 67108864
+    maximum_sample_bytes: 536870912
     maximum_coded_bits: 8388608
     maximum_output_bytes: 8388608
     maximum_demultiplexed_bits: 8388608
@@ -207,11 +211,11 @@ receiver:
     radio_link_failure_frames: 300
 power_control:
   uplink:
-    sir_ceiling_db: 13.0
-    initial_sir_db: 9.0
-    sir_floor_db: 6.0
+    sir_ceiling_db: 16.0
+    initial_sir_db: 13.0
+    sir_floor_db: 13.0
     target_bler: 0.02
-    tpc_hold_groups: 0
+    tpc_hold_groups: 2
   downlink:
     # Channel percentages allocate power, not amplitude, and must total at most 100.
     allocation:
@@ -262,6 +266,7 @@ hspa:
       cqi_interval_ms: 8
     resources:
       control_codes: 1
+      # HS-PDSCH codes. The lowest is given to dedicated channels when they need room.
       data_codes: 15
       maximum_queue_bytes: 67108864
       maximum_queue_bytes_per_ue: 1048576
@@ -307,7 +312,7 @@ hspa:
     edpcch_power_offset: 5
     edpdch_references:
     - etfci: 11
-      power_offset: 11
+      power_offset: 19
     - etfci: 81
       power_offset: 25
     resources:

@@ -151,6 +151,8 @@ impl ReceiveFilter {
         let length = self.taps.len();
         #[cfg(target_feature = "avx2")]
         let vector_eight = self.stride == 1 && length == vector::SPECIALIZED_TAPS;
+        #[cfg(target_feature = "avx2")]
+        let vector_short = self.stride == 1 && length == 33;
         let mut destination = output;
         let mut emit = first;
         let mut block_start = start.index;
@@ -180,6 +182,25 @@ impl ReceiveFilter {
                     destination[..vector::PlanarBlock::OUTPUTS].copy_from_slice(&values);
                     destination = &mut destination[vector::PlanarBlock::OUTPUTS..];
                     emit = index.checked_add(vector::PlanarBlock::OUTPUTS as u64);
+                }
+            }
+            #[cfg(target_feature = "avx2")]
+            if vector_short
+                && emit.is_some_and(|index| {
+                    block_end.saturating_sub(index) >= vector::PlanarBlock33::OUTPUTS as u64
+                })
+            {
+                let planar = vector::PlanarBlock33::new(&self.history);
+                while let Some(index) = emit.filter(|&index| index < block_end) {
+                    let head = (block_end - index - 1) as usize;
+                    if head < vector::PlanarBlock33::OUTPUTS - 1 {
+                        break;
+                    }
+                    let values = planar
+                        .consecutive_eight(head + 1 - vector::PlanarBlock33::OUTPUTS, &self.taps);
+                    destination[..vector::PlanarBlock33::OUTPUTS].copy_from_slice(&values);
+                    destination = &mut destination[vector::PlanarBlock33::OUTPUTS..];
+                    emit = index.checked_add(vector::PlanarBlock33::OUTPUTS as u64);
                 }
             }
             while let Some(index) = emit.filter(|&index| index < block_end) {

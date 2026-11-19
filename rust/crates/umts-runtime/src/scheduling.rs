@@ -17,9 +17,10 @@ pub enum Role {
     RxReader,
     TxPrepare,
     RxProcess,
+    RxDecode,
 }
 
-const ROLE_COUNT: usize = 8;
+const ROLE_COUNT: usize = 9;
 const ROLES: [Role; ROLE_COUNT] = [
     Role::Main,
     Role::Background,
@@ -29,12 +30,21 @@ const ROLES: [Role; ROLE_COUNT] = [
     Role::RxReader,
     Role::TxPrepare,
     Role::RxProcess,
+    Role::RxDecode,
 ];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placement {
+    /// One logical CPU. Linux only.
+    Cpu(u32),
+    /// The fastest CPUs the process may use on Linux, the performance cores on macOS.
+    Performance,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Assignment {
     pub fifo_priority: Option<u8>,
-    pub cpu: Option<u32>,
+    pub cpu: Option<Placement>,
 }
 
 #[derive(Clone, Debug)]
@@ -42,6 +52,8 @@ pub struct Plan {
     assignments: Assignments,
     #[cfg(target_os = "linux")]
     allowed: rustix::thread::CpuSet,
+    #[cfg(target_os = "linux")]
+    performance: rustix::thread::CpuSet,
 }
 
 static PLAN: OnceLock<Plan> = OnceLock::new();
@@ -56,6 +68,7 @@ pub struct Assignments {
     pub rx_reader: Assignment,
     pub tx_prepare: Assignment,
     pub rx_process: Assignment,
+    pub rx_decode: Assignment,
 }
 
 impl Assignments {
@@ -69,6 +82,7 @@ impl Assignments {
             Role::RxReader => self.rx_reader,
             Role::TxPrepare => self.tx_prepare,
             Role::RxProcess => self.rx_process,
+            Role::RxDecode => self.rx_decode,
         }
     }
 }
@@ -92,7 +106,7 @@ impl Plan {
             let allowed = rustix::thread::sched_getaffinity(None)?;
             for role in ROLES {
                 let assignment = assignments.get(role);
-                if let Some(cpu) = assignment.cpu {
+                if let Some(Placement::Cpu(cpu)) = assignment.cpu {
                     let cpu = cpu as usize;
                     if cpu >= rustix::thread::CpuSet::MAX_CPU || !allowed.is_set(cpu) {
                         return Err(io::Error::new(
@@ -102,20 +116,24 @@ impl Plan {
                     }
                 }
             }
+            let performance = linux::fastest(&allowed, linux::maximum_frequency);
             Ok(Self {
                 assignments,
                 allowed,
+                performance,
             })
         }
         #[cfg(target_os = "macos")]
         {
             if ROLES
                 .iter()
-                .any(|role| assignments.get(*role).cpu.is_some())
+                .any(|role| matches!(assignments.get(*role).cpu, Some(Placement::Cpu(_))))
             {
+                // Real-time threads already run on performance cores here, so `performance`
+                // needs no further action and a CPU number has no equivalent.
                 return Err(io::Error::new(
                     io::ErrorKind::Unsupported,
-                    "CPU placement is not available on macOS",
+                    "macOS cannot place a thread on a numbered CPU, use `performance`",
                 ));
             }
             Ok(Self { assignments })
@@ -137,6 +155,13 @@ impl Plan {
                 self.assignment(role)
             );
         }
+        #[cfg(target_os = "linux")]
+        tracing::info!(
+            "Thread scheduling performance CPUs: {:?}",
+            (0..rustix::thread::CpuSet::MAX_CPU)
+                .filter(|cpu| self.performance.is_set(*cpu))
+                .collect::<Vec<_>>()
+        );
         PLAN.set(self).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -314,7 +339,26 @@ mod tests {
             rx_reader: normal,
             tx_prepare: normal,
             rx_process: normal,
+            rx_decode: normal,
         }
+    }
+
+    #[test]
+    fn performance_selects_the_fastest_allowed_cpus() {
+        let mut allowed = rustix::thread::CpuSet::new();
+        for cpu in [2, 4, 5, 7] {
+            allowed.set(cpu);
+        }
+        let hybrid = linux::fastest(&allowed, |cpu| {
+            Some(if cpu < 4 { 4_700_000 } else { 3_500_000 })
+        });
+        assert!(hybrid.is_set(2));
+        assert!([4, 5, 7].iter().all(|cpu| !hybrid.is_set(*cpu)));
+        assert_eq!(linux::fastest(&allowed, |_| Some(3_000_000)), allowed);
+        assert_eq!(linux::fastest(&allowed, |_| None), allowed);
+        // A CPU without a rating never outranks a rated one.
+        let partial = linux::fastest(&allowed, |cpu| (cpu != 2).then_some(3_500_000));
+        assert!(!partial.is_set(2) && partial.is_set(4));
     }
 
     #[test]
@@ -325,7 +369,7 @@ mod tests {
             assert!(Plan::new(assignments).is_err());
         }
         let mut assignments = normal_assignments();
-        assignments.rx_reader.cpu = Some(u32::MAX);
+        assignments.rx_reader.cpu = Some(Placement::Cpu(u32::MAX));
         assert!(Plan::new(assignments).is_err());
     }
 
@@ -337,7 +381,7 @@ mod tests {
                 .find(|cpu| allowed.is_set(*cpu))
                 .unwrap();
             let mut assignments = normal_assignments();
-            assignments.background.cpu = Some(cpu as u32);
+            assignments.background.cpu = Some(Placement::Cpu(cpu as u32));
             let plan = Plan::new(assignments).unwrap();
             linux::apply(
                 &plan,
@@ -381,14 +425,17 @@ mod darwin_tests {
             rx_reader: assignment,
             tx_prepare: assignment,
             rx_process: assignment,
+            rx_decode: assignment,
         }
     }
 
     #[test]
-    fn cpu_placement_is_rejected() {
+    fn numbered_cpus_are_rejected_and_performance_is_accepted() {
         let mut requested = assignments(None);
-        requested.rx_reader.cpu = Some(0);
+        requested.rx_reader.cpu = Some(Placement::Cpu(0));
         assert!(Plan::new(requested).is_err());
+        requested.rx_reader.cpu = Some(Placement::Performance);
+        assert!(Plan::new(requested).is_ok());
     }
 
     #[test]

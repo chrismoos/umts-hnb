@@ -2,7 +2,7 @@
 
 scalars!(bool, u8, u16, u32, u64, i8, i16, i32, i64, R99ErrorDelivery, R99TrafficClass, HnbgwTransport, RustCircuitInitialization, R99CodingKind, R99TpcAlgorithm, SimdMode, RrcReleaseTransportPolicy);
 
-scalars!(PacketMode, Rel99Profile, NetworkOperationMode);
+scalars!(PacketMode, Rel99Profile, NetworkOperationMode, CpuPlacement);
 
 records! {
     R99ErrorRatio {
@@ -279,18 +279,20 @@ properties! {
     "management.grpc.maximum_capture_disk_mib": u32, false;
     "runtime.dch_cpu": Option<u32>, false;
     "runtime.scheduling.enabled": bool, false;
-    "runtime.scheduling.main_cpu": Option<u32>, false;
-    "runtime.scheduling.control_cpu": Option<u32>, false;
-    "runtime.scheduling.usb_cpu": Option<u32>, false;
-    "runtime.scheduling.prepare_cpu": Option<u32>, false;
-    "runtime.scheduling.submit_cpu": Option<u32>, false;
-    "runtime.scheduling.receive_cpu": Option<u32>, false;
-    "runtime.scheduling.reader_cpu": Option<u32>, false;
+    "runtime.scheduling.main_cpu": Option<CpuPlacement>, false;
+    "runtime.scheduling.control_cpu": Option<CpuPlacement>, false;
+    "runtime.scheduling.usb_cpu": Option<CpuPlacement>, false;
+    "runtime.scheduling.prepare_cpu": Option<CpuPlacement>, false;
+    "runtime.scheduling.submit_cpu": Option<CpuPlacement>, false;
+    "runtime.scheduling.receive_cpu": Option<CpuPlacement>, false;
+    "runtime.scheduling.reader_cpu": Option<CpuPlacement>, false;
+    "runtime.scheduling.decode_cpu": Option<CpuPlacement>, false;
     "runtime.scheduling.usb_priority": u8, false;
     "runtime.scheduling.submit_priority": u8, false;
     "runtime.scheduling.reader_priority": u8, false;
     "runtime.scheduling.prepare_priority": u8, false;
     "runtime.scheduling.receive_priority": u8, false;
+    "runtime.scheduling.decode_priority": u8, false;
     "runtime.simd": SimdMode, false;
     "runtime.media.maximum_packet_bytes": u32, false;
     "runtime.media.maximum_voice_bytes": u32, false;

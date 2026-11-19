@@ -39,6 +39,7 @@ pub use control_transition::{ControlSearchGeometry, PreparedControlSearch};
 pub use feedback::{DedicatedFeedback, PilotTpcCounters, PilotTpcStatus, RejectedPilotObservation};
 pub use hsupa_attachment::HsupaAttachment;
 pub use outer_loop::{LinkCrcObservation, LinkPowerRegistry, OuterLoopSettings, OuterLoopStatus};
+pub(crate) use power_control::set_edch_slots;
 pub use power_control::{
     PilotFeedback, PilotObservation, PilotSirTarget, PilotTpcController, PilotTpcSettings,
     PowerControlError, TpcProvenance,
@@ -184,6 +185,8 @@ pub enum UplinkDecodeObservation {
         start: ChipInstant,
         control: umts_dsp::hsupa::ControlDecision,
         presence_log_likelihood: Option<f64>,
+        transport_bits: usize,
+        scheduling: Option<umts_mac::hsupa::scheduling::SchedulingInformation>,
         feedback: umts_mac::hsupa::Reception,
         outcome: BlockOutcome,
     },

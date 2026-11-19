@@ -173,6 +173,10 @@ impl AllocationCalendar {
         count: u8,
     ) -> Result<ChannelUse, Error> {
         let channels = ChannelUse::new(self.pool, downlink, control, first, count)?;
+        let span = ((1u32 << count) - 1) << first;
+        if crate::radio_resources::lent_data_codes() & span != 0 {
+            return Err(Error::Conflict);
+        }
         if ue.epoch != self.frontier.epoch
             || channels.start.epoch != self.frontier.epoch
             || channels.start.index < self.frontier.index
@@ -271,6 +275,42 @@ mod tests {
         test_support::{at, count, source},
     };
     use std::num::NonZeroU8;
+
+    #[test]
+    fn lent_codes_are_avoided_until_returned() {
+        let source = source(true);
+        let mut resources =
+            RadioResources::new(at(0).epoch, source.information(), count(2), 0..=1).unwrap();
+        let lease = resources
+            .reserve_hsdpa(NonZeroU8::new(15).unwrap(), NonZeroU8::MIN)
+            .unwrap();
+        let pool = *lease.codes();
+        let control = pool.control_codes().next().unwrap().index();
+        let ue = UeKey {
+            epoch: at(0).epoch,
+            slot: 0,
+            generation: NonZeroU64::MIN,
+        };
+        let calendar = AllocationCalendar::new(pool, at(0), count(2)).unwrap();
+        let downlink = at(CONTROL_LEAD_CHIPS);
+        let first = pool.first_data();
+        crate::radio_resources::set_lent_data_codes(1 << first);
+        assert_eq!(
+            calendar.available(ue, downlink, control, first, 15).err(),
+            Some(Error::Conflict)
+        );
+        assert_eq!(
+            calendar.available(ue, downlink, control, first, 1).err(),
+            Some(Error::Conflict)
+        );
+        assert!(
+            calendar
+                .available(ue, downlink, control, first + 1, 14)
+                .is_ok()
+        );
+        crate::radio_resources::set_lent_data_codes(0);
+        assert!(calendar.available(ue, downlink, control, first, 15).is_ok());
+    }
 
     #[test]
     fn peers_share_disjoint_codes_and_published_reservations_outlive_cancellation() {

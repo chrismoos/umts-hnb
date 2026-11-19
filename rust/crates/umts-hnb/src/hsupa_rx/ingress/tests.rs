@@ -106,6 +106,7 @@ fn ingress(identity: ReceiveIdentity) -> (Ingress, Delivery) {
 fn publish(delivery: &mut Delivery, identity: ReceiveIdentity, tti: u64, payload: &[Bit]) {
     assert_eq!(delivery.reserve(), Publication::Pending);
     delivery.publish(DecodedTti {
+        transport_bits: 18,
         timing: None,
         identity,
         start: at(tti * Tti::TwoMilliseconds.chips()),
@@ -203,6 +204,15 @@ fn report_retry_does_not_duplicate_feedback_and_only_air_receipts_count_as_submi
         let second = packet(1);
         publish(&mut delivery, identity, 0, &first);
         publish(&mut delivery, identity, 1, &second);
+        let early = at(Tti::TwoMilliseconds.chips() - 1);
+        assert_eq!(
+            ingress
+                .service_one(early, at(0), &mut ports.control)
+                .unwrap()
+                .progress,
+            IngressProgress::Idle
+        );
+        assert_eq!(ingress.counters().decoded, 0);
         let now = at(2 * Tti::TwoMilliseconds.chips());
         assert_eq!(
             ingress

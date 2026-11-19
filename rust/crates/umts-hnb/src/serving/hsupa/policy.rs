@@ -220,7 +220,7 @@ impl Policy {
             minimum: Etfci::new(0).expect("minimum E-TFCI"),
             scheduling: SchedulingInformation {
                 without_grant: Some(ReportingPeriod::EveryTti),
-                with_grant: None,
+                with_grant: Some(ReportingPeriod::Milliseconds(100)),
                 power_offset: HARQ_POWER_OFFSET_DB,
             },
             rv_zero_only: self.rv_zero_only,

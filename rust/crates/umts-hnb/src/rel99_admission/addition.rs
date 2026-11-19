@@ -108,6 +108,11 @@ pub(super) struct ScheduledAddition {
 impl ScheduledAddition {
     pub(super) fn fail(&mut self, error: AdmissionError) {
         if self.failure.is_none() {
+            tracing::warn!(
+                "Bearer addition failed: identity={:?} phase={:?} error={error:?}",
+                self.identity,
+                self.phase,
+            );
             self.failure = Some(error);
         }
         self.phase = AdditionPhase::RecoveryRequired;

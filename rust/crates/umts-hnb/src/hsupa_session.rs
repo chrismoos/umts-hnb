@@ -573,6 +573,45 @@ impl Session {
             && now.index >= configuration.activation().time().index
     }
 
+    pub fn uplink_demand(&self, now: ChipInstant) -> bool {
+        self.grants
+            .as_ref()
+            .is_some_and(|grants| grants.demand(now))
+    }
+
+    pub fn uplink_use(&self) -> Option<(bool, Option<f64>, f64, u8)> {
+        self.grants.as_ref().map(|grants| {
+            (
+                grants.backlog(),
+                grants.used_bits_per_interval(),
+                grants.most_used_bits_per_interval(),
+                grants.allocation(),
+            )
+        })
+    }
+
+    pub fn carries_voice(&self) -> bool {
+        self.procedure
+            .construction()
+            .dedicated()
+            .bearers()
+            .iter()
+            .any(|bearer| bearer.domain == Some(umts_types::CnDomain::Cs))
+    }
+
+    pub fn allocate_uplink(&mut self, now: ChipInstant, processes: u8) {
+        let Some(grants) = self.grants.as_mut() else {
+            return;
+        };
+        if grants.allocate(now, processes) {
+            crate::signalling::desire_process_allocation(
+                self.identity().ue,
+                processes,
+                self.procedure.construction(),
+            );
+        }
+    }
+
     pub fn service_grants(
         &mut self,
         now: ChipInstant,

@@ -296,40 +296,71 @@ fn plan_release_restoring(
         })
         .cloned()
         .collect();
-    let configuration = Arc::new(
-        super::compose::Composition::restore_packets(
-            projected.compiled.configuration(),
-            &retained,
-        )?
-        .configuration(
-            previous.configuration().physical().clone(),
-            capabilities,
-            policy,
-        )?,
-    );
-    capabilities
-        .validate_dch(&configuration)
-        .map_err(Error::Capability)?;
-    service::validate_guaranteed(&configuration, retained.iter())?;
-    let compiled = Arc::new(
-        CompiledRel99::new(
-            configuration,
-            policy.maximum_total_coded_bits,
-            policy.transport,
-        )
-        .map_err(Error::Plan)?,
-    );
-    capabilities
-        .validate_downlink_matched_bits(
-            compiled
-                .maximum_downlink_matched_tti_bits()
+    let composition = super::compose::Composition::restore_packets(
+        projected.compiled.configuration(),
+        &retained,
+    )?;
+    let old = previous.configuration().physical();
+    let lent = crate::radio_resources::lent_data_codes();
+    let borrows = old.secondary_scrambling.is_none()
+        && old.downlink_codes.iter().any(|code| {
+            let data_code = u32::from(*code) * 16 / u32::from(old.downlink_sf.max(16));
+            lent & (1 << data_code) != 0
+        });
+    let mut candidates: Vec<_> = policy
+        .physical
+        .iter()
+        .filter(|_| borrows)
+        .map(|template| {
+            let mut physical = template.clone();
+            physical.primary_scrambling = old.primary_scrambling;
+            physical.secondary_scrambling = old.secondary_scrambling;
+            physical.uplink_scrambling = old.uplink_scrambling;
+            physical.default_offset_512_chips = old.default_offset_512_chips;
+            physical.frame_offset_256_chips = old.frame_offset_256_chips;
+            physical
+        })
+        .filter(|physical| physical.downlink_sf > old.downlink_sf)
+        .collect();
+    candidates.sort_by_key(|physical| std::cmp::Reverse(physical.downlink_sf));
+    candidates.push(old.clone());
+    let mut failure = Error::Capacity;
+    for physical in candidates {
+        let compose = || -> Result<Arc<CompiledRel99>, Error> {
+            let configuration =
+                Arc::new(composition.configuration(physical, capabilities, policy)?);
+            capabilities
+                .validate_dch(&configuration)
+                .map_err(Error::Capability)?;
+            service::validate_guaranteed(&configuration, retained.iter())?;
+            let compiled = Arc::new(
+                CompiledRel99::new(
+                    configuration,
+                    policy.maximum_total_coded_bits,
+                    policy.transport,
+                )
                 .map_err(Error::Plan)?,
-        )
-        .map_err(Error::Capability)?;
-    Ok(PlannedRelease {
-        compiled,
-        ..projected
-    })
+            );
+            capabilities
+                .validate_downlink_matched_bits(
+                    compiled
+                        .maximum_downlink_matched_tti_bits()
+                        .map_err(Error::Plan)?,
+                )
+                .map_err(Error::Capability)?;
+            Ok(compiled)
+        };
+        match compose() {
+            Ok(compiled) => {
+                return Ok(PlannedRelease {
+                    compiled,
+                    ..projected
+                });
+            }
+            Err(error) => failure = error,
+        }
+    }
+    Err(failure)
 }
 
 pub fn plan_release(

@@ -167,6 +167,13 @@ impl DedicatedBearers {
                         else {
                             unreachable!("transparent frame")
                         };
+                        tracing::debug!(
+                            ue = ?self.owner,
+                            cfn,
+                            observed,
+                            lead = boundary.saturating_sub(observed),
+                            "Transparent ciphering activation"
+                        );
                         if boundary
                             .checked_sub(observed)
                             .is_none_or(|distance| distance < TM_RESPONSE_MARGIN_FRAMES)

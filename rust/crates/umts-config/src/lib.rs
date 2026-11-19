@@ -3,7 +3,9 @@
 use std::net::{IpAddr, Ipv4Addr};
 
 use anyhow::{Context, Result, anyhow, bail};
+mod cpu_placement;
 mod deployment;
+pub use cpu_placement::CpuPlacement;
 pub use deployment::Deployment;
 mod network_mode;
 #[allow(clippy::collapsible_if)]

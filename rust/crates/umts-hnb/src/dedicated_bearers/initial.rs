@@ -11,7 +11,9 @@ use umts_security::ciphering::{
 use umts_security::counters::Start;
 use umts_types::CnDomain;
 
-const TM_RESPONSE_MARGIN_FRAMES: u64 = 200;
+// The handset sets its activation at least 200 frames after it first sends the response.
+// Delivery uses part of that, so only the frames needed to apply it are required here.
+const TM_RESPONSE_MARGIN_FRAMES: u64 = 100;
 const DOMAINS: usize = 2;
 
 mod additional;
@@ -228,6 +230,13 @@ impl DedicatedBearers {
                         else {
                             unreachable!("transparent frame")
                         };
+                        tracing::debug!(
+                            ue = ?self.owner,
+                            cfn,
+                            observed,
+                            lead = boundary.saturating_sub(observed),
+                            "Transparent ciphering activation"
+                        );
                         if boundary
                             .checked_sub(observed)
                             .is_none_or(|distance| distance < TM_RESPONSE_MARGIN_FRAMES)

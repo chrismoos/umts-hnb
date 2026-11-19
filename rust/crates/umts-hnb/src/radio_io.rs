@@ -1776,6 +1776,7 @@ pub struct TimedRx {
     filter: ReceiveFilter,
     chip_phase: usize,
     raw: Vec<Complex32>,
+    noise: crate::uplink_noise::NoiseMeter,
     matched: Vec<Complex32>,
     chips: Vec<Complex32>,
     generation: u64,
@@ -1883,6 +1884,7 @@ impl TimedRx {
             filter,
             chip_phase: phase,
             raw: vec![Complex32::default(); maximum_samples.get()],
+            noise: crate::uplink_noise::NoiseMeter::new(rate.get()),
             matched: vec![Complex32::default(); maximum_samples.get()],
             chips: vec![Complex32::default(); maximum_samples.get().div_ceil(rate.get())],
             generation: 0,
@@ -2162,6 +2164,7 @@ impl TimedRx {
             &self.raw[skip..observation.samples],
             discontinuity,
         );
+        self.noise.feed(&self.raw[skip..observation.samples]);
         if let Some(started) = coordinate_started {
             self.read_timing
                 .as_mut()

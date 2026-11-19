@@ -391,13 +391,20 @@ impl ReceiveResources {
                 Ok(()) | Err(ReceiveError::Capacity | ReceiveError::Dsp(DspError::Capacity)) => {}
                 Err(error) => return Err(anyhow!("HSUPA initial suffix resources: {error:?}")),
             }
-            if receiver
-                .retained_bytes()
-                .map_err(|error| anyhow!("HSUPA receive storage: {error:?}"))?
-                > settings.maximum_receive_bytes.get()
-            {
-                receiver.discard_initial_suffixes();
-            }
+        }
+        if receiver
+            .retained_bytes()
+            .map_err(|error| anyhow!("HSUPA receive storage: {error:?}"))?
+            > settings.maximum_receive_bytes.get()
+        {
+            receiver.discard_collection_buffer();
+        }
+        if receiver
+            .retained_bytes()
+            .map_err(|error| anyhow!("HSUPA receive storage: {error:?}"))?
+            > settings.maximum_receive_bytes.get()
+        {
+            receiver.discard_initial_suffixes();
         }
         ensure!(
             receiver

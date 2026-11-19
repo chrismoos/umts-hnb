@@ -22,7 +22,8 @@ pub use physical::UplinkChannels;
 pub use power::{ChannelGains, SingleReferencePower, control_gain_ratio};
 pub use rate_matching::HarqRateMatching;
 pub use receive::{
-    CollectedTti, CollectionProgress, ControlMeasurements, DataMeasurements, TtiCollector,
+    ChipEqualizer, CollectedTti, CollectionProgress, ControlMeasurements, DataMeasurements,
+    TtiCollector,
 };
 pub use timing::HarqFeedbackTiming;
 pub use transport::{TransportDecoder, TransportEncoder, TransportPlan};

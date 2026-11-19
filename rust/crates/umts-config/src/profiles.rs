@@ -353,7 +353,9 @@ mod tests {
             serde_yaml::to_value(standard_planner()).unwrap(),
             expanded["rel99"]["physical"]["planner"]
         );
-        let before = Deployment::parse(EXPANDED, OPERATOR).unwrap();
+        let mut before = Deployment::parse(EXPANDED, OPERATOR).unwrap();
+        assert_eq!(before.config.power_control.uplink.sir_ceiling_db, 13.0);
+        before.effective["power_control"]["uplink"]["sir_ceiling_db"] = Value::from(16.0);
         let after = Deployment::parse(DEFAULTS, OPERATOR).unwrap();
         assert_eq!(before.effective, after.effective);
     }

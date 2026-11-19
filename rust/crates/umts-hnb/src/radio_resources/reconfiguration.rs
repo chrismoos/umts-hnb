@@ -253,6 +253,7 @@ impl RadioResources {
             codes,
             plan,
         };
+        self.lend_for(change.tree, &change.codes);
         for code in &change.codes {
             self.tree_mut(change.tree)[leaves(*code)].fill(true);
         }
@@ -521,15 +522,15 @@ fn select_codes(
     codes
         .try_reserve_exact(count)
         .map_err(|_| Error::Capacity)?;
-    for tree in
-        std::iter::once(old_tree).chain(ScramblingTree::all().filter(|tree| *tree != old_tree))
-    {
+    for (tree, borrow) in super::with_borrowing(
+        std::iter::once(old_tree).chain(ScramblingTree::all().filter(|tree| *tree != old_tree)),
+    ) {
         codes.clear();
         for index in 0..spreading_factor {
             let code = OvsfCode::new(spreading_factor, index).map_err(|_| Error::Configuration)?;
-            if leaves(code)
-                .all(|leaf| !resources.tree(tree)[leaf] || tree == old_tree && old_mask[leaf])
-            {
+            if resources.code_free(tree, code, borrow, |leaf| {
+                tree == old_tree && old_mask[leaf]
+            }) {
                 codes.push(code);
             }
             if codes.len() == count {
@@ -553,6 +554,7 @@ fn free_only(
             }
         }
     }
+    resources.reclaim_loan();
 }
 
 fn clone_codes(codes: &[OvsfCode]) -> Result<Vec<OvsfCode>, Error> {

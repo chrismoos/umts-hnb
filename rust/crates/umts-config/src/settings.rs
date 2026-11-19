@@ -283,7 +283,7 @@ pub(super) fn default_hspa_cqi_feedback_cycle_ms() -> u16 {
     2
 }
 pub(super) fn default_hspa_uplink_dpcch_sir_target_db() -> f64 {
-    34.7712
+    16.0
 }
 pub(super) fn default_hspa_uplink_target_bler() -> f64 {
     0.02
@@ -337,7 +337,7 @@ pub(super) fn default_dedicated_shared_bytes() -> u32 {
     4194304
 }
 pub(super) fn default_dedicated_sample_bytes() -> u32 {
-    67108864
+    536870912
 }
 pub(super) fn default_dedicated_coded_bits() -> u32 {
     8388608
@@ -2028,27 +2028,30 @@ pub struct ThreadSchedulingConfig {
     #[doc = "Apply and verify thread scheduling at startup. Requires Linux real-time permissions. Failure stops startup rather than silently serving without the requested policy."]
     #[serde(default = "default_scheduling_enabled")]
     pub enabled: bool,
-    #[doc = "Controller CPU. Null uses the startup allowed CPU mask."]
+    #[doc = "Controller CPU. A CPU number or `performance`. Null uses the startup allowed CPU mask."]
     #[serde(default)]
-    pub main_cpu: Option<u32>,
-    #[doc = "Background and native driver I/O CPU. Null uses the startup allowed CPU mask."]
+    pub main_cpu: Option<crate::CpuPlacement>,
+    #[doc = "Background and native driver I/O CPU. A CPU number or `performance`. Null uses the startup allowed CPU mask."]
     #[serde(default)]
-    pub control_cpu: Option<u32>,
-    #[doc = "Named USB event thread CPU. Null uses the startup allowed CPU mask."]
+    pub control_cpu: Option<crate::CpuPlacement>,
+    #[doc = "Named USB event thread CPU. A CPU number or `performance`. Null uses the startup allowed CPU mask."]
     #[serde(default)]
-    pub usb_cpu: Option<u32>,
-    #[doc = "TX waveform preparation CPU. Null uses the startup allowed CPU mask."]
+    pub usb_cpu: Option<crate::CpuPlacement>,
+    #[doc = "TX waveform preparation CPU. A CPU number or `performance`. Null uses the startup allowed CPU mask."]
     #[serde(default)]
-    pub prepare_cpu: Option<u32>,
-    #[doc = "SDR submission CPU. Null uses the startup allowed CPU mask."]
+    pub prepare_cpu: Option<crate::CpuPlacement>,
+    #[doc = "SDR submission CPU. A CPU number or `performance`. Null uses the startup allowed CPU mask."]
     #[serde(default)]
-    pub submit_cpu: Option<u32>,
-    #[doc = "Receive DSP CPU. Null uses the startup allowed CPU mask."]
+    pub submit_cpu: Option<crate::CpuPlacement>,
+    #[doc = "Receive DSP CPU. A CPU number or `performance`. Null uses the startup allowed CPU mask."]
+    #[serde(default = "default_performance_cpu")]
+    pub receive_cpu: Option<crate::CpuPlacement>,
+    #[doc = "SDR receive reader CPU. A CPU number or `performance`. Null uses the startup allowed CPU mask."]
     #[serde(default)]
-    pub receive_cpu: Option<u32>,
-    #[doc = "SDR receive reader CPU. Null uses the startup allowed CPU mask."]
-    #[serde(default)]
-    pub reader_cpu: Option<u32>,
+    pub reader_cpu: Option<crate::CpuPlacement>,
+    #[doc = "Uplink decode worker CPU. A CPU number or `performance`. Null uses the startup allowed CPU mask."]
+    #[serde(default = "default_performance_cpu")]
+    pub decode_cpu: Option<crate::CpuPlacement>,
     #[doc = "FIFO priority for native SDR I/O threads."]
     #[serde(default = "default_usb_priority")]
     pub usb_priority: u8,
@@ -2064,6 +2067,12 @@ pub struct ThreadSchedulingConfig {
     #[doc = "FIFO priority for receive DSP."]
     #[serde(default = "default_receive_priority")]
     pub receive_priority: u8,
+    #[doc = "FIFO priority for the uplink decode worker."]
+    #[serde(default = "default_receive_priority")]
+    pub decode_priority: u8,
+}
+fn default_performance_cpu() -> Option<crate::CpuPlacement> {
+    Some(crate::CpuPlacement::Performance)
 }
 impl Default for ThreadSchedulingConfig {
     fn default() -> Self {
@@ -2074,13 +2083,15 @@ impl Default for ThreadSchedulingConfig {
             usb_cpu: Default::default(),
             prepare_cpu: Default::default(),
             submit_cpu: Default::default(),
-            receive_cpu: Default::default(),
+            receive_cpu: default_performance_cpu(),
             reader_cpu: Default::default(),
+            decode_cpu: default_performance_cpu(),
             usb_priority: default_usb_priority(),
             submit_priority: default_io_priority(),
             reader_priority: default_io_priority(),
             prepare_priority: default_prepare_priority(),
             receive_priority: default_receive_priority(),
+            decode_priority: default_receive_priority(),
         }
     }
 }
@@ -2100,6 +2111,9 @@ impl ThreadSchedulingConfig {
         }
         if !(1..=99).contains(&self.receive_priority) {
             anyhow::bail!("ThreadSchedulingConfig.receive_priority outside 1..=99");
+        }
+        if !(1..=99).contains(&self.decode_priority) {
+            anyhow::bail!("ThreadSchedulingConfig.decode_priority outside 1..=99");
         }
         Ok(())
     }
@@ -3447,9 +3461,9 @@ impl EdpdchReference {
 pub struct RustHsupaReceive {
     #[doc = "Positive saturation limit for decoder likelihoods."]
     pub likelihood_limit: f64,
-    #[doc = "Minimum normalized E-DPCCH codeword correlation."]
+    #[doc = "Normalized E-DPCCH correlation threshold. Strong absolute evidence may also admit a control word."]
     pub minimum_control_correlation: f64,
-    #[doc = "Minimum E-DPCCH separation from the next codeword."]
+    #[doc = "Normalized E-DPCCH separation threshold for relative-confidence admission."]
     pub minimum_control_margin: f64,
     #[doc = "Maximum turbo decoder iterations per received transport."]
     pub iterations: u8,
