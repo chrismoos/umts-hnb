@@ -1525,7 +1525,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "sctp-transport"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bindgen",
  "libc",
@@ -2213,7 +2213,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "umts-config"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -2224,7 +2224,7 @@ dependencies = [
 
 [[package]]
 name = "umts-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "umts-iuh",
  "umts-sctp",
@@ -2234,7 +2234,7 @@ dependencies = [
 
 [[package]]
 name = "umts-dsp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "num-complex",
  "rustfft",
@@ -2245,7 +2245,7 @@ dependencies = [
 
 [[package]]
 name = "umts-hnb"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2286,7 +2286,7 @@ dependencies = [
 
 [[package]]
 name = "umts-iuh"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rasn",
  "tracing",
@@ -2296,14 +2296,14 @@ dependencies = [
 
 [[package]]
 name = "umts-mac"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "umts-types",
 ]
 
 [[package]]
 name = "umts-management"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2334,7 +2334,7 @@ dependencies = [
 
 [[package]]
 name = "umts-radio"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "num-complex",
  "sdr-hal",
@@ -2343,14 +2343,14 @@ dependencies = [
 
 [[package]]
 name = "umts-rlc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "umts-types",
 ]
 
 [[package]]
 name = "umts-rrc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rasn",
  "umts-rlc",
@@ -2362,7 +2362,7 @@ dependencies = [
 
 [[package]]
 name = "umts-rrc-codec"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rasn",
  "umts-rrc-schema",
@@ -2370,7 +2370,7 @@ dependencies = [
 
 [[package]]
 name = "umts-rrc-schema"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rasn",
  "rasn-compiler",
@@ -2378,7 +2378,7 @@ dependencies = [
 
 [[package]]
 name = "umts-runtime"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "libc",
  "rustix",
@@ -2390,14 +2390,14 @@ dependencies = [
 
 [[package]]
 name = "umts-sctp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "sctp-transport",
 ]
 
 [[package]]
 name = "umts-security"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "umts-types",
  "zeroize",
@@ -2405,11 +2405,11 @@ dependencies = [
 
 [[package]]
 name = "umts-types"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "umts-user-plane"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "getrandom 0.4.3",
  "umts-types",
