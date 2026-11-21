@@ -60,6 +60,19 @@ rel99:
 rrc:
   cn_drx_cycle_length_coefficient: 6
   combined_bearer_setup: true
+  dormancy:
+    # Seconds without packets before an inactive packet handset is parked. 0 disables parking.
+    after_seconds: 20
+    # Paging cycle of a parked handset: 3 = 80 ms, 4 = 160 ms, 5 = 320 ms, 6 = 640 ms,
+    # 7 = 1.28 s, 8 = 2.56 s, 9 = 5.12 s. A handset attached for calls uses at most the
+    # cn_drx_cycle_length_coefficient cycle (the idle-mode paging cycle the core network
+    # uses for calls, same values).
+    drx_cycle_length_coefficient: 6
+    # T323: minimum seconds between two handset requests to be parked early (fast dormancy).
+    # 0, 5, 10, 20, 30, 60, 90 or 120. null selects 5 while parking is enabled.
+    fast_dormancy_inhibit_seconds: null
+    # cell_pch or ura_pch. ura_pch broadcasts ura_identity in SIB2.
+    state: cell_pch
   inactivity_delete_seconds: 300
   inactivity_release_seconds: 180
   max_allowed_ul_tx_power_dbm: 33

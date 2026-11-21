@@ -944,7 +944,7 @@ impl Session {
                     .map_err(PublishError::Downstream)?;
                     ue.release_requests[slot] = Some(request);
                     // TS 25.413 8.1: Iu Release takes precedence over RAB assignment.
-                    ue.rab_requests[slot].clear();
+                    ue.rab_requests[slot].retain(|pending| pending.in_flight);
                     result
                 } else if let ranap::Inbound::RabAssignment(assignment) = message.message {
                     let serial = self.next_rab_request.ok_or(fail(Error::Capacity))?;
@@ -1043,7 +1043,7 @@ impl Session {
                     .and_then(|bytes| ranap::decode(bytes, self.limits.codec).ok());
                 ue.domains[slot] = LinkState::Releasing;
                 ue.peer_disconnected[slot] = true;
-                ue.rab_requests[slot].clear();
+                ue.rab_requests[slot].retain(|pending| pending.in_flight);
                 let request = IuReleaseRequest::new(
                     self.owner,
                     self.association,

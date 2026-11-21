@@ -117,8 +117,7 @@ pub(super) fn body_r7_from_base(
                             configuration
                                 .bearer(id)
                                 .ok_or(DedicatedError::Bearer)?
-                                .mapping
-                                .wire_r7()
+                                .mapping_info_r7()
                         },
                     ))
                 })
@@ -477,8 +476,7 @@ pub(super) fn retained_mapping(
     let mut mapping = configuration
         .bearer(id)
         .ok_or(DedicatedError::Bearer)?
-        .mapping
-        .wire_r7();
+        .mapping_info_r7();
     if let Some(retained) = hs.mappings().iter().find(|mapping| mapping.bearer == id) {
         let mut previous = hs.mapping_r7(retained)?;
         mapping.0[0].dl_logical_channel_mapping_list =

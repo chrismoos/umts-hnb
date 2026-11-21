@@ -18,6 +18,10 @@ const MAX_PAGING_BITS: usize = 512;
 const MAX_INDICATORS: usize = 144;
 const PCH_AFTER_OCCASION_FRAMES: u64 = 2;
 const RETENTION_CYCLES: u64 = 2;
+// Paging occasions tried for a UE in CELL_PCH or URA_PCH before it is treated as lost.
+const PARKED_ATTEMPTS: u64 = 8;
+// Occasions on which a release page is repeated. The UE does not answer it.
+const RELEASE_ATTEMPTS: u64 = 2;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PagingCounters {
@@ -49,6 +53,11 @@ struct Entry {
     occasion: Option<u64>,
     receipt: Option<TransportSubmission>,
     completed_attempts: u64,
+    /// Raised by the cell for queued downlink data, so the page has no core information.
+    local: bool,
+    /// A page by U-RNTI was sent, so a UE that is no longer parked has answered it.
+    utran_sent: bool,
+    release: bool,
 }
 pub(super) struct PagingQueue {
     entries: Vec<Option<Entry>>,
@@ -197,8 +206,76 @@ impl CommonSignalling {
             occasion: None,
             receipt: None,
             completed_attempts: 0,
+            local: false,
+            utran_sent: false,
+            release: false,
         });
         counters.queued = counters.queued.saturating_add(1);
+    }
+
+    /// Pages a UE in CELL_PCH or URA_PCH for downlink data waiting in the cell (TS 25.331
+    /// 8.1.2.2, UTRAN-originated paging). Returns false when the UE is not parked or the queue
+    /// is full.
+    pub(crate) fn page_parked(&mut self, key: UeKey) -> bool {
+        self.queue_parked_page(key, false)
+    }
+
+    /// Pages a parked UE with the release indicator (TS 25.331 8.1.2.3).
+    pub(crate) fn page_parked_release(&mut self, key: UeKey) -> bool {
+        self.queue_parked_page(key, true)
+    }
+
+    fn queue_parked_page(&mut self, key: UeKey, release: bool) -> bool {
+        let Some(imsi) = self.registry.get(key).and_then(|context| {
+            context
+                .dormancy
+                .parked
+                .and(context.core_imsi.or(context.registration_imsi))
+        }) else {
+            return false;
+        };
+        if self
+            .paging
+            .entries
+            .iter()
+            .flatten()
+            .any(|entry| entry.local && entry.release == release && entry.request.imsi == imsi)
+        {
+            return true;
+        }
+        let Some(slot) = self.paging.entries.iter_mut().find(|entry| entry.is_none()) else {
+            return false;
+        };
+        *slot = Some(Entry {
+            request: Request {
+                domain: umts_iuh::Domain::Ps,
+                imsi,
+                temporary: None,
+                area: None,
+                cause: None,
+                drx_coefficient: None,
+                search_other_domain: false,
+            },
+            expiry: None,
+            occasion: None,
+            receipt: None,
+            completed_attempts: 0,
+            local: true,
+            utran_sent: false,
+            release,
+        });
+        true
+    }
+
+    pub(crate) fn take_unanswered_page(&mut self) -> Option<UeKey> {
+        let slot = (0..self.registry.capacity()).find(|slot| {
+            self.registry
+                .at_slot(*slot)
+                .is_some_and(|(_, context)| context.dormancy.unanswered)
+        })?;
+        let (key, _) = self.registry.at_slot(slot)?;
+        self.registry.get_mut(key)?.dormancy.unanswered = false;
+        Some(key)
     }
 
     pub(crate) fn service_paging(
@@ -251,27 +328,67 @@ impl CommonSignalling {
         } else {
             1
         };
-        let coefficient = entry
-            .request
-            .drx_coefficient
-            .or(self.paging.drx[domain])
-            .unwrap_or(9);
-        if !(6..=9).contains(&coefficient) {
+        // A UE in CELL_PCH or URA_PCH ignores CN-identity records (TS 25.331 8.1.2.3) and is
+        // paged by its U-RNTI at the occasions of its connected-mode DRX cycle (TS 25.304 8.3).
+        let parked = (0..self.registry.capacity())
+            .filter_map(|slot| self.registry.at_slot(slot))
+            .find(|(_, context)| {
+                context.dormancy.parked.is_some()
+                    && (context.core_imsi == Some(entry.request.imsi)
+                        || context.registration_imsi == Some(entry.request.imsi))
+            })
+            .map(|(key, context)| {
+                (
+                    key,
+                    context.setup.assigned().urnti(),
+                    rrc::connected_drx_coefficient(
+                        context.dormancy.drx_coefficient,
+                        self.paging.drx[0].into_iter(),
+                    ),
+                )
+            });
+        if parked.is_none() && (entry.local || entry.utran_sent) {
+            return false;
+        }
+        let coefficient = match parked {
+            Some((_, _, coefficient)) => coefficient,
+            None => entry
+                .request
+                .drx_coefficient
+                .or(self.paging.drx[domain])
+                .unwrap_or(9),
+        };
+        if !(if parked.is_some() { 3..=9 } else { 6..=9 }).contains(&coefficient) {
             count.invalid = count.invalid.saturating_add(1);
             return false;
         }
+        let attempts = if entry.release {
+            RELEASE_ATTEMPTS
+        } else if parked.is_some() {
+            PARKED_ATTEMPTS
+        } else {
+            RETENTION_CYCLES
+        };
         let cycle = 1u64 << coefficient;
         let Some(expiry) = entry.expiry.or_else(|| {
-            now.index.checked_add(
-                (RETENTION_CYCLES * cycle + PCH_AFTER_OCCASION_FRAMES) * CHIPS_PER_FRAME,
-            )
+            now.index
+                .checked_add((attempts * cycle + PCH_AFTER_OCCASION_FRAMES) * CHIPS_PER_FRAME)
         }) else {
             count.invalid = count.invalid.saturating_add(1);
             return false;
         };
         entry.expiry = Some(expiry);
-        if now.index >= expiry {
+        if now.index >= expiry || (parked.is_some() && entry.completed_attempts >= attempts) {
             count.expired = count.expired.saturating_add(1);
+            if let Some((key, _, _)) = parked
+                && let Some(context) = self.registry.get_mut(key)
+            {
+                if entry.release {
+                    context.dormancy.release_paged = true;
+                } else {
+                    context.dormancy.unanswered = true;
+                }
+            }
             return false;
         }
 
@@ -284,7 +401,7 @@ impl CommonSignalling {
                         || context.registration_imsi == Some(entry.request.imsi))
             })
             .map(|(key, _)| key);
-        if let Some(key) = known {
+        if let Some(key) = known.filter(|_| parked.is_none()) {
             if entry.completed_attempts != 0
                 && self.registry.get(key).is_some_and(|context| {
                     context.router.as_ref().is_some_and(|router| {
@@ -314,7 +431,7 @@ impl CommonSignalling {
         }
 
         // Identity resolution can enable TS 25.331 8.1.11 paging before expiry.
-        if entry.completed_attempts >= RETENTION_CYCLES {
+        if entry.completed_attempts >= attempts {
             return true;
         }
 
@@ -370,7 +487,22 @@ impl CommonSignalling {
         let mut records = [record(&entry.request); rrc::MAX_RECORDS];
         let mut selected = [None; rrc::MAX_RECORDS];
         let mut record_count = 1;
-        let Ok(mut encoded) = rrc::idle_records(&records[..record_count]) else {
+        let first = match parked {
+            Some((_, urnti, _)) => rrc::paging_type1(
+                &[],
+                &[rrc::UtranPage {
+                    urnti,
+                    cn: (!entry.local).then(|| rrc::CnOriginatedPage {
+                        domain: entry.request.domain.into(),
+                        cause: cause(entry.request.cause),
+                        temporary: entry.request.temporary.is_some(),
+                    }),
+                    release: entry.release.then_some(rrc::ReleaseCause::normalEvent),
+                }],
+            ),
+            None => rrc::idle_records(&records[..record_count]),
+        };
+        let Ok(mut encoded) = first else {
             count.invalid = count.invalid.saturating_add(1);
             return false;
         };
@@ -388,7 +520,8 @@ impl CommonSignalling {
             let Some(candidate) = candidate else {
                 continue;
             };
-            if record_count == rrc::MAX_RECORDS {
+            // A page by U-RNTI is sent alone. Its occasion follows another DRX cycle.
+            if record_count == rrc::MAX_RECORDS || parked.is_some() {
                 break;
             }
             if candidate.receipt.is_some()
@@ -487,6 +620,14 @@ impl CommonSignalling {
                 }
                 entry.receipt = Some(receipt);
                 count.pch_planned = count.pch_planned.saturating_add(record_count as u64);
+                if let Some((key, _, _)) = parked
+                    && !entry.release
+                {
+                    entry.utran_sent = true;
+                    if let Some(context) = self.registry.get_mut(key) {
+                        context.dormancy.paged = true;
+                    }
+                }
                 true
             }
             Err(CommonTxError::Capacity | CommonTxError::Conflict) => {

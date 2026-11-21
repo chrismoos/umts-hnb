@@ -772,10 +772,11 @@ impl<T: Transport> CommonController<T> {
         if session.identity() != identity {
             return Err(HsupaCleanupError::Identity);
         }
-        if self
-            .radio
-            .phase(identity.ue)
-            .is_some_and(|phase| phase != umts_rrc::establishment::EstablishmentPhase::Closed)
+        if !matches!(owner.error, crate::rel99_admission::AdmissionError::Parked)
+            && self
+                .radio
+                .phase(identity.ue)
+                .is_some_and(|phase| phase != umts_rrc::establishment::EstablishmentPhase::Closed)
         {
             // A promoted bearer keeps its completed initial procedure, not setup authority.
             if owner.procedure.receipt().is_none() {
@@ -890,46 +891,62 @@ pub(crate) fn shift_share(shares: &mut [(u32, u8)], uses: &[ShareUse]) -> bool {
             .find(|(other, _)| *other == slot)
             .map_or(0, |(_, processes)| processes.count_ones())
     };
+    let needed = |entry: &ShareUse| {
+        (f64::from(count(entry.slot)) * entry.used / (TARGET_USE * densest)).ceil() as u32
+    };
     let full = |entry: &&ShareUse| entry.backlog || entry.used >= FULL_USE * densest;
     let light = |entry: &&ShareUse| !entry.backlog && entry.used < LIGHT_USE * densest;
-    let Some(receiver) = uses
-        .iter()
-        .filter(full)
-        .min_by_key(|entry| count(entry.slot))
-    else {
-        return false;
+    let largest = |receiver: &ShareUse| {
+        uses.iter()
+            .max_by_key(|entry| count(entry.slot))
+            .filter(|entry| count(entry.slot) >= count(receiver.slot) + 2)
     };
-    let idle = uses
+    let outgrown = uses
         .iter()
-        .filter(light)
-        .filter(|entry| count(entry.slot) > LIGHT_PROCESSES)
-        .max_by_key(|entry| count(entry.slot));
-    let largest = uses
-        .iter()
-        .max_by_key(|entry| count(entry.slot))
-        .filter(|entry| count(entry.slot) >= count(receiver.slot) + 2);
-    let Some(donor) = idle.or(largest).filter(|entry| entry.slot != receiver.slot) else {
-        return false;
-    };
-    let held = count(donor.slot);
-    let keep = if idle.is_some() {
-        ((f64::from(held) * donor.used / (TARGET_USE * densest)).ceil() as u32)
-            .clamp(LIGHT_PROCESSES, held)
+        .filter(|entry| !full(entry) && needed(entry) > count(entry.slot))
+        .min_by_key(|entry| count(entry.slot));
+    let (donor, receiver, moved) = if let Some(receiver) = outgrown
+        && let Some(donor) = largest(receiver)
+    {
+        (donor.slot, receiver.slot, 1)
     } else {
-        held - 1
+        let Some(receiver) = uses
+            .iter()
+            .filter(full)
+            .min_by_key(|entry| count(entry.slot))
+        else {
+            return false;
+        };
+        let idle = uses
+            .iter()
+            .filter(light)
+            .filter(|entry| count(entry.slot) > LIGHT_PROCESSES)
+            .max_by_key(|entry| count(entry.slot));
+        let Some(donor) = idle
+            .or(largest(receiver))
+            .filter(|entry| entry.slot != receiver.slot)
+        else {
+            return false;
+        };
+        let held = count(donor.slot);
+        let keep = if idle.is_some() {
+            needed(donor).clamp(LIGHT_PROCESSES, held)
+        } else {
+            held - 1
+        };
+        (donor.slot, receiver.slot, held - keep)
     };
     let mut process = 0u8;
-    if let Some((_, processes)) = shares.iter().find(|(slot, _)| *slot == donor.slot) {
+    if let Some((_, processes)) = shares.iter().find(|(slot, _)| *slot == donor) {
         let mut remaining = *processes;
-        for _ in keep..held {
+        for _ in 0..moved {
             process |= remaining & remaining.wrapping_neg();
-            remaining &= remaining - 1;
+            remaining &= remaining.wrapping_sub(1);
         }
     }
     if process == 0 {
         return false;
     }
-    let (donor, receiver) = (donor.slot, receiver.slot);
     for (slot, processes) in shares.iter_mut() {
         if *slot == donor {
             *processes &= !process;
@@ -984,8 +1001,15 @@ mod share_tests {
             &[entry(0, true, 3000.0), entry(1, false, 1200.0)]
         ));
         assert_eq!(depressed[1].1.count_ones(), 3);
-        let steady = [entry(0, true, 9000.0), entry(1, false, 5000.0)];
-        assert!(!shift_share(&mut shares, &steady));
+        let outgrown = [entry(0, true, 9000.0), entry(1, false, 2500.0)];
+        assert!(shift_share(&mut shares, &outgrown));
+        assert_eq!((shares[0].1.count_ones(), shares[1].1.count_ones()), (5, 3));
+        assert!(!shift_share(
+            &mut shares,
+            &[entry(0, true, 9000.0), entry(1, false, 1500.0)]
+        ));
+        assert!(shift_share(&mut shares, &lopsided));
+        assert_eq!((shares[0].1.count_ones(), shares[1].1.count_ones()), (6, 2));
         let both = [entry(0, true, 9000.0), entry(1, true, 9000.0)];
         for expected in [(5, 3), (4, 4)] {
             assert!(shift_share(&mut shares, &both));

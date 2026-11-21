@@ -238,7 +238,11 @@ fn retirement_with_one_process_budget_visits_both_links() {
         .expect("TX retirement receipt required");
     assert!(cell.available_bytes() < 32_000_000);
     drop(retained);
-    assert_eq!(cell.available_bytes(), 32_000_000);
+    // Shared HSDPA plan tables stay with the cell.
+    assert_eq!(
+        cell.available_bytes() + cell.tables().retained_bytes(),
+        32_000_000
+    );
 }
 
 impl Session {

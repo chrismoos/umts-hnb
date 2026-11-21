@@ -4,8 +4,8 @@ use super::*;
 use crate::common_control::{ControlDecision, ControlIngress, ControlSdu};
 use umts_rrc::establishment::{RejectionReason, build_rejection};
 use umts_rrc::mobility::{
-    CellUpdate, UpdateCause, build_cell_update_confirm_dcch, build_signalling_failure_release,
-    build_unknown_context_release, inspect_cell_update,
+    CellUpdate, ConfirmTarget, UpdateCause, build_signalling_failure_release,
+    build_unknown_context_release, cell_update_confirm_message, inspect_cell_update,
 };
 use umts_rrc::nas::NasPublishError;
 
@@ -17,6 +17,7 @@ pub enum CommonIngressWork {
     ConnectionRequested(UeKey),
     ConnectionReleased { key: UeKey, update: CellUpdate },
     UpdateConfirmed { key: UeKey, update: CellUpdate },
+    UraUpdateConfirmed { key: UeKey },
     ConnectionRejected { wait_time_seconds: u8 },
     UnknownContextReleaseQueued { urnti: u32 },
     Rejected(SignallingError),
@@ -93,6 +94,16 @@ impl CommonSignalling {
         let context = self.registry.get(key).ok_or(SignallingError::Origin)?;
         let update = inspect_cell_update(context.setup.assigned(), decoded)
             .map_err(SignallingError::Mobility)?;
+        tracing::debug!(
+            "CELL UPDATE: slot={} generation={} cause={:?} dedicated={} parked={:?} rlc_errors=({}, {})",
+            key.slot,
+            key.generation,
+            update.cause,
+            context.dedicated_route.is_some(),
+            context.dormancy.parked,
+            update.signalling_rlc_error,
+            update.user_rlc_error,
+        );
         // TS 25.331 8.3.1.5: an unrecoverable RLC error is answered with RRC CONNECTION RELEASE
         // on the CCCH. A UE that left CELL_DCH gets the same answer because its dedicated
         // bearers cannot be re-established on common channels here.
@@ -102,9 +113,60 @@ impl CommonSignalling {
                 self.release_decoded_update(key, now, bytes, bit_length, decoded, transaction)?;
             return Ok(CommonIngressWork::ConnectionReleased { key, update });
         }
+        let context = self.registry.get_mut(key).ok_or(SignallingError::Origin)?;
+        if context.dormancy.defers(update.cause) {
+            // A repeated cell update replaces the stored one, so the confirm answers the latest.
+            let first = context.dormancy.deferred.is_none();
+            context.dormancy.deferred = Some(super::dormancy::DeferredUpdate {
+                bytes: bytes.to_vec(),
+                bit_length,
+                received: now,
+            });
+            context.dormancy.wake |= first;
+            tracing::info!(
+                "Cell update from a parked UE: slot={} generation={} cause={:?} answer deferred until its channel is prepared",
+                key.slot,
+                key.generation,
+                update.cause
+            );
+            return Ok(CommonIngressWork::UpdateConfirmed { key, update });
+        }
         self.confirm_decoded_update(key, bytes, bit_length, decoded, update)?;
         super::log_common("CELL UPDATE confirmed", key, now, bytes, bit_length);
         Ok(CommonIngressWork::UpdateConfirmed { key, update })
+    }
+
+    /// Sends the confirm of a deferred cell update. Returns false when none is stored.
+    pub(crate) fn send_deferred_confirm(&mut self, key: UeKey) -> Result<bool, SignallingError> {
+        let context = self.registry.get_mut(key).ok_or(SignallingError::Origin)?;
+        let Some(deferred) = context.dormancy.deferred.take() else {
+            return Ok(false);
+        };
+        let assigned = context.setup.assigned();
+        let outcome = umts_rrc_codec::decode_uplink_common(&deferred.bytes, deferred.bit_length)
+            .map_err(SignallingError::Codec)
+            .and_then(|decoded| {
+                let update =
+                    inspect_cell_update(assigned, &decoded).map_err(SignallingError::Mobility)?;
+                self.confirm_decoded_update(
+                    key,
+                    &deferred.bytes,
+                    deferred.bit_length,
+                    &decoded,
+                    update,
+                )
+            });
+        match outcome {
+            Ok(()) => Ok(true),
+            Err(error) => {
+                if super::scheduling::backpressure(&error)
+                    && let Some(context) = self.registry.get_mut(key)
+                {
+                    context.dormancy.deferred = Some(deferred);
+                }
+                Err(error)
+            }
+        }
     }
 
     fn confirm_decoded_update(
@@ -117,70 +179,81 @@ impl CommonSignalling {
     ) -> Result<(), SignallingError> {
         let context = self.registry.get_mut(key).ok_or(SignallingError::Origin)?;
         let assigned = context.setup.assigned();
-        // TS 25.331 8.3.1.2: a cell reselection clears the UE's C-RNTI, so that update
-        // re-assigns it and 8.3.1.7 then expects UTRAN MOBILITY INFORMATION CONFIRM.
-        let new_crnti = (update.cause == UpdateCause::CellReselection).then_some(assigned.crnti());
+        let paged = std::mem::take(&mut context.dormancy.paged);
+        let target = context
+            .dormancy
+            .confirm_target(update.cause, assigned.crnti(), paged)
+            .unwrap_or(ConfirmTarget::Fach {
+                // TS 25.331 8.3.1.2: a cell reselection clears the UE's C-RNTI, so that update
+                // re-assigns it and 8.3.1.7 then expects UTRAN MOBILITY INFORMATION CONFIRM.
+                new_crnti: (update.cause == UpdateCause::CellReselection)
+                    .then_some(assigned.crnti()),
+            });
+        if !matches!(target, ConfirmTarget::Fach { .. }) {
+            tracing::info!(
+                "Cell update from a parked UE: slot={} generation={} cause={:?} answer={target:?}",
+                key.slot,
+                key.generation,
+                update.cause
+            );
+        }
         let transaction = context
             .transactions
             .next(transactions::MessageType::CellUpdateConfirm);
-        let protected = decoded.value.integrity_check_info.is_some();
-        let starts = update.starts;
-        let router = &mut context.router;
-        let um = &mut context.um;
-        let message = build_cell_update_confirm_dcch(transaction, new_crnti);
-        let publish = |encoded: &umts_rrc_codec::EncodedRrc| {
-            let mut enqueue = || {
-                um.enqueue(
-                    key,
-                    Bits::new(&encoded.bytes, encoded.bit_length)
-                        .map_err(|_| SignallingError::Message)?,
-                )
-                .map_err(SignallingError::Um)
-            };
-            match router.as_mut() {
-                Some(router) => router
-                    .update_starts_with(key, starts, enqueue)
-                    .map_err(|error| match error {
-                        NasPublishError::Procedure(error) => SignallingError::Nas(error),
-                        NasPublishError::Downstream(error) => error,
-                    }),
-                None => enqueue(),
-            }
-        };
-        let protection = &mut context.protection;
-        if protected {
-            protection.admit_common_response_with(key, bytes, bit_length, |admission| {
-                admission
-                    .publish_response_with(
-                        SignallingBearer::Unacknowledged.identity(),
-                        &message,
-                        publish,
-                    )
-                    .map_err(|error| protection::schedule_error(error, |error| error))
-            })?;
-        } else if protection
-            .integrity
-            .allows_unprotected_common(key)
-            .map_err(SignallingError::Integrity)?
-        {
-            protection
-                .integrity
-                .publish_with(
-                    key,
-                    SignallingBearer::Unacknowledged.identity(),
-                    &message,
-                    publish,
-                )
-                .map_err(|error| protection::schedule_error(error, |error| error))?;
-        } else {
-            return Err(SignallingError::Nas(
-                umts_rrc::nas::NasError::SecurityRequired,
-            ));
-        }
+        let message =
+            cell_update_confirm_message(transaction, target).map_err(SignallingError::Mobility)?;
+        publish_update_confirm(
+            context,
+            key,
+            bytes,
+            bit_length,
+            decoded,
+            &message,
+            Some(update.starts),
+        )?;
         context
             .transactions
             .admitted(transactions::MessageType::CellUpdateConfirm, transaction);
         context.activity = context.activity.saturating_add(1);
+        Ok(())
+    }
+
+    /// TS 25.331 8.3.1: a UE in URA_PCH reports a periodic update or a URA it cannot confirm.
+    /// It stays in URA_PCH with the URA identity this cell broadcasts.
+    fn confirm_ura_update(
+        &mut self,
+        key: UeKey,
+        bytes: &[u8],
+        bit_length: usize,
+        decoded: &DecodedUplinkCommon,
+    ) -> Result<(), SignallingError> {
+        let context = self.registry.get_mut(key).ok_or(SignallingError::Origin)?;
+        let update = umts_rrc::mobility::inspect_ura_update(context.setup.assigned(), decoded)
+            .map_err(SignallingError::Mobility)?;
+        let Some(state @ umts_rrc::mobility::ParkedState::UraPch { .. }) = context.dormancy.parked
+        else {
+            return Err(SignallingError::Phase);
+        };
+        let transaction = context
+            .transactions
+            .next(transactions::MessageType::UraUpdateConfirm);
+        let message = umts_rrc::mobility::ura_update_confirm_message(
+            transaction,
+            state,
+            context.dormancy.drx_coefficient,
+        )
+        .map_err(SignallingError::Mobility)?;
+        publish_update_confirm(context, key, bytes, bit_length, decoded, &message, None)?;
+        context
+            .transactions
+            .admitted(transactions::MessageType::UraUpdateConfirm, transaction);
+        context.dormancy.updates = context.dormancy.updates.saturating_add(1);
+        tracing::info!(
+            "URA update confirmed: slot={} generation={} cause={:?}",
+            key.slot,
+            key.generation,
+            update.cause
+        );
         Ok(())
     }
 
@@ -369,9 +442,90 @@ impl CommonSignalling {
                     transaction,
                 )
             }
+            ULCCCHMessageType::uraUpdate(_) => {
+                let urnti = umts_rrc::mobility::ura_update_urnti(decoded)
+                    .map_err(SignallingError::Mobility)?;
+                let Some(key) = self.key_for_urnti(urnti) else {
+                    let release = build_unknown_context_release(urnti, transaction)
+                        .map_err(SignallingError::Mobility)?;
+                    self.rb0
+                        .enqueue(
+                            Bits::new(&release.bytes, release.bit_length)
+                                .map_err(|_| SignallingError::Message)?,
+                        )
+                        .map_err(SignallingError::Common)?;
+                    return Ok(CommonIngressWork::UnknownContextReleaseQueued { urnti });
+                };
+                self.confirm_ura_update(key, sdu.bytes(), sdu.bit_length(), decoded)?;
+                Ok(CommonIngressWork::UraUpdateConfirmed { key })
+            }
             _ => Err(SignallingError::Message),
         }
     }
+}
+
+fn publish_update_confirm(
+    context: &mut Context,
+    key: UeKey,
+    bytes: &[u8],
+    bit_length: usize,
+    decoded: &DecodedUplinkCommon,
+    message: &umts_rrc_schema::class_definitions::DLDCCHMessage,
+    starts: Option<umts_rrc::establishment::DomainStarts>,
+) -> Result<(), SignallingError> {
+    let protected = decoded.value.integrity_check_info.is_some();
+    let router = &mut context.router;
+    let um = &mut context.um;
+    let publish = |encoded: &umts_rrc_codec::EncodedRrc| {
+        let mut enqueue = || {
+            um.enqueue(
+                key,
+                Bits::new(&encoded.bytes, encoded.bit_length)
+                    .map_err(|_| SignallingError::Message)?,
+            )
+            .map_err(SignallingError::Um)
+        };
+        match (router.as_mut(), starts) {
+            (Some(router), Some(starts)) => router
+                .update_starts_with(key, starts, enqueue)
+                .map_err(|error| match error {
+                    NasPublishError::Procedure(error) => SignallingError::Nas(error),
+                    NasPublishError::Downstream(error) => error,
+                }),
+            _ => enqueue(),
+        }
+    };
+    let protection = &mut context.protection;
+    if protected {
+        protection.admit_common_response_with(key, bytes, bit_length, |admission| {
+            admission
+                .publish_response_with(
+                    SignallingBearer::Unacknowledged.identity(),
+                    message,
+                    publish,
+                )
+                .map_err(|error| protection::schedule_error(error, |error| error))
+        })?;
+    } else if protection
+        .integrity
+        .allows_unprotected_common(key)
+        .map_err(SignallingError::Integrity)?
+    {
+        protection
+            .integrity
+            .publish_with(
+                key,
+                SignallingBearer::Unacknowledged.identity(),
+                message,
+                publish,
+            )
+            .map_err(|error| protection::schedule_error(error, |error| error))?;
+    } else {
+        return Err(SignallingError::Nas(
+            umts_rrc::nas::NasError::SecurityRequired,
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

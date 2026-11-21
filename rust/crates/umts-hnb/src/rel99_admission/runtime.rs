@@ -595,6 +595,11 @@ pub(super) fn fail(entry: &mut Entry, error: AdmissionError) {
                 entry.identity,
                 entry.lifecycle.phase()
             );
+        } else if matches!(error, AdmissionError::Parked) {
+            tracing::info!(
+                "Dedicated channel released for a parked UE: {:?}",
+                entry.identity
+            );
         } else {
             tracing::warn!(
                 "Dedicated bearer failed: identity={:?} phase={:?} error={error:?}",
@@ -621,7 +626,10 @@ fn stop(
                 .local_failure(now)
                 .map_err(AdmissionError::Procedure)?;
         }
-        if entry.procedure.receipt().is_some() && radio.phase(entry.identity.ue).is_some() {
+        if entry.procedure.receipt().is_some()
+            && radio.phase(entry.identity.ue).is_some()
+            && !matches!(entry.failure, Some(AdmissionError::Parked))
+        {
             if radio.dedicated_route(entry.identity.ue) == Some(entry.identity) {
                 radio
                     .require_dedicated_recovery(entry.identity)

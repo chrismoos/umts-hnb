@@ -68,6 +68,9 @@ impl BroadcastTags {
     pub(crate) fn sib1(self) -> u16 {
         self.sib1
     }
+    pub(crate) fn sib2(self) -> u16 {
+        u16::from(self.sib3)
+    }
     pub(crate) fn sib3(self) -> u16 {
         u16::from(self.sib3)
     }

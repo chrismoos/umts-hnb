@@ -256,6 +256,7 @@ pub fn validate_rrc_value(
                 canonical::<ie::MasterInformationBlock>(bytes, bit_length)
             }
             SibType::Type1 => canonical::<ie::SysInfoType1>(bytes, bit_length),
+            SibType::Type2 => canonical::<ie::SysInfoType2>(bytes, bit_length),
             SibType::Type3 => canonical::<ie::SysInfoType3>(bytes, bit_length),
             SibType::Type5 => canonical::<ie::SysInfoType5>(bytes, bit_length),
             SibType::Type7 => canonical::<ie::SysInfoType7>(bytes, bit_length),

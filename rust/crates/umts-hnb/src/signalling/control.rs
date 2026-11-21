@@ -91,6 +91,7 @@ impl<'a> ReceivedControl<'a> {
         if matches!(
             self.message.value.message,
             ULDCCHMessageType::radioBearerSetupComplete(_)
+                | ULDCCHMessageType::radioBearerReconfigurationComplete(_)
         ) && self.time.provenance()
             != umts_rlc::acknowledged::ReceiveProvenance::Path(expected.configuration)
         {
@@ -111,8 +112,21 @@ impl<'a> ReceivedControl<'a> {
         let hsdpa = procedure.initial_hsdpa().cloned();
         let prior_starts = pending.prior_starts;
         let domains = counters::setup_domains(procedure.rabs());
+        let resume = procedure.mode() == umts_rrc::dedicated::SetupMode::Resume;
         let result = procedure
             .response_with(self.key, self.time, self.message, |counters| {
+                let counters = if resume {
+                    let resumed = counters.resumed_with(prior_starts);
+                    tracing::debug!(
+                        "Resume START: key={:?} response={:?} cell_update={prior_starts:?} selected={:?}",
+                        self.key,
+                        counters.domain_starts(),
+                        resumed.new_bearer_start(),
+                    );
+                    resumed
+                } else {
+                    counters
+                };
                 security.admit_starts_with(
                     self.key,
                     self.protection,
@@ -239,6 +253,7 @@ impl<'a> ReceivedControl<'a> {
         if matches!(
             self.message.value.message,
             ULDCCHMessageType::radioBearerSetupComplete(_)
+                | ULDCCHMessageType::radioBearerReconfigurationComplete(_)
         ) && pending.expected.is_some_and(|expected| {
             expected.ue != self.key
                 || self.time.provenance()
@@ -413,6 +428,7 @@ impl CommonSignalling {
             return Err(SignallingError::Phase);
         }
         context.dedicated_route = Some(identity);
+        context.dormancy.resuming = false;
         Ok(())
     }
     pub(crate) fn require_dedicated_recovery(
@@ -606,9 +622,11 @@ impl CommonSignalling {
         key: UeKey,
     ) -> Result<TransactionId, SignallingError> {
         let context = self.registry.get(key).ok_or(SignallingError::Origin)?;
-        Ok(context
-            .transactions
-            .next(transactions::MessageType::RadioBearerSetup))
+        Ok(context.transactions.next(if context.dormancy.resuming {
+            transactions::MessageType::RadioBearerReconfiguration
+        } else {
+            transactions::MessageType::RadioBearerSetup
+        }))
     }
     /// The coordinator must prepare the real new links before publication and retain this receipt through recovery.
     #[cfg(test)]
@@ -736,14 +754,29 @@ impl CommonSignalling {
         if context.bearer_change.is_some() {
             return Err(SignallingError::Capacity);
         }
+        if context.dormancy.resuming {
+            // The UE must have answered the confirm that gave it a C-RNTI (TS 25.331 8.3.1.7)
+            // before it can receive this message on SRB2.
+            if context.dormancy.deferred.is_some() || context.dormancy.confirm_unanswered {
+                return Err(SignallingError::Capacity);
+            }
+            context
+                .um
+                .address_by_urnti(false)
+                .map_err(SignallingError::Um)?;
+        }
         let prior_starts = context
             .router
             .as_ref()
             .ok_or(SignallingError::Phase)?
             .starts();
-        let transaction = context
-            .transactions
-            .next(transactions::MessageType::RadioBearerSetup);
+        let resume = procedure.mode() == umts_rrc::dedicated::SetupMode::Resume;
+        let kind = if resume {
+            transactions::MessageType::RadioBearerReconfiguration
+        } else {
+            transactions::MessageType::RadioBearerSetup
+        };
+        let transaction = context.transactions.next(kind);
         if transaction != procedure.transaction() {
             return Err(SignallingError::Dedicated(DedicatedError::Transaction));
         }
@@ -768,8 +801,9 @@ impl CommonSignalling {
                 let decoded = decode_downlink_dedicated(&encoded.bytes, encoded.bit_length)
                     .map_err(SignallingError::Codec)?;
                 if !matches!(
-                    decoded.value.message,
-                    DLDCCHMessageType::radioBearerSetup(_)
+                    (&decoded.value.message, resume),
+                    (DLDCCHMessageType::radioBearerSetup(_), false)
+                        | (DLDCCHMessageType::radioBearerReconfiguration(_), true)
                 ) || decoded.value.integrity_check_info.is_some()
                 {
                     return Err(SignallingError::Message);
@@ -797,9 +831,7 @@ impl CommonSignalling {
                 SetupPublicationError::Procedure(error) => SignallingError::Dedicated(error),
                 SetupPublicationError::Publication(error) => error,
             })?;
-        context
-            .transactions
-            .admitted(transactions::MessageType::RadioBearerSetup, transaction);
+        context.transactions.admitted(kind, transaction);
         context
             .reports
             .describe_configuration(procedure.configuration());

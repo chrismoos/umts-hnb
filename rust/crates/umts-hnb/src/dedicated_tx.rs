@@ -1196,9 +1196,22 @@ impl DedicatedTransmitBank {
             .checked_add(CHIPS_PER_SLOT)
             .ok_or(TransmitError::Time)?;
         let mut failed = 0;
+        let emitting = self
+            .sessions
+            .iter()
+            .flatten()
+            .filter(|session| session.emits())
+            .count()
+            .max(1);
+        let boost = (10.0 * (self.generations.len() as f32 / emitting as f32).log10())
+            .floor()
+            .max(0.0) as u8;
         for session in self.sessions.iter_mut().flatten() {
             if !session.emits() || next <= session.anchor.time.index {
                 continue;
+            }
+            if let Some(power) = session.downlink_power.as_mut() {
+                power.limit_boost(boost);
             }
             if let Err(error) = session.preflight(start, next) {
                 session.record_failure(TransmitOperation::Synthesis, start, start, &error);

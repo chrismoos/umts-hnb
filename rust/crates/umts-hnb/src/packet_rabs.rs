@@ -585,6 +585,19 @@ impl<T: BoundDatagrams> PacketRabs<T> {
         Ok(true)
     }
     // Removing transport is not evidence that the UE's radio bearer has been released.
+    pub fn release_connection(&mut self, connection: ConnectionKey) -> Result<usize, Error> {
+        let keys: Vec<RouteKey> = self
+            .active
+            .keys()
+            .chain(self.pending.keys())
+            .filter(|key| key.connection == connection)
+            .copied()
+            .collect();
+        for key in &keys {
+            self.release_transport(*key)?;
+        }
+        Ok(keys.len())
+    }
     pub fn release_transport(&mut self, key: RouteKey) -> Result<Option<SequenceState>, Error> {
         if let Some(ticket) = self.pending.get(&key).map(|pending| pending.ticket) {
             self.cancel(ticket)?;

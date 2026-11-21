@@ -787,6 +787,98 @@ mod tests {
     }
 
     #[test]
+    fn dormancy_defaults_park_after_twenty_seconds_and_ranges_are_checked() {
+        let cfg = base_cfg();
+        let dormancy = &cfg.rrc.dormancy;
+        assert!(dormancy.enabled());
+        assert_eq!(dormancy.after_seconds, 20);
+        assert_eq!(dormancy.state, DormancyState::CellPch);
+        assert_eq!(dormancy.drx_cycle_length_coefficient, 6);
+        assert_eq!(dormancy.fast_dormancy_inhibit_seconds, None);
+        assert_eq!(dormancy.effective_fast_dormancy_inhibit_seconds(), Some(5));
+
+        let mut cfg = base_cfg();
+        cfg.rrc.dormancy.after_seconds = 0;
+        cfg.rrc.cn_drx_cycle_length_coefficient = 8;
+        cfg.rrc.dormancy.drx_cycle_length_coefficient = 4;
+        assert_eq!(cfg.rrc.utran_drx_cycle_length_coefficient(), 8);
+        cfg.rrc.dormancy.fast_dormancy_inhibit_seconds = Some(20);
+        assert_eq!(
+            cfg.rrc.dormancy.effective_fast_dormancy_inhibit_seconds(),
+            None
+        );
+        cfg.rrc.dormancy.after_seconds = 5;
+        cfg.validate().unwrap();
+        assert_eq!(cfg.rrc.utran_drx_cycle_length_coefficient(), 4);
+        assert_eq!(
+            cfg.rrc.dormancy.effective_fast_dormancy_inhibit_seconds(),
+            Some(20)
+        );
+        cfg.rrc.dormancy.fast_dormancy_inhibit_seconds = None;
+        assert_eq!(
+            cfg.rrc.dormancy.effective_fast_dormancy_inhibit_seconds(),
+            Some(5)
+        );
+
+        for coefficient in [3, 9] {
+            let mut cfg = base_cfg();
+            cfg.rrc.dormancy.drx_cycle_length_coefficient = coefficient;
+            cfg.validate().unwrap();
+        }
+        for coefficient in [0, 2, 10] {
+            let mut cfg = base_cfg();
+            cfg.rrc.dormancy.drx_cycle_length_coefficient = coefficient;
+            assert!(cfg.validate().is_err(), "coefficient {coefficient}");
+        }
+        for seconds in [0, 5, 10, 20, 30, 60, 90, 120] {
+            let mut cfg = base_cfg();
+            cfg.rrc.dormancy.fast_dormancy_inhibit_seconds = Some(seconds);
+            cfg.validate().unwrap();
+        }
+        for seconds in [1, 15, 121, u8::MAX] {
+            let mut cfg = base_cfg();
+            cfg.rrc.dormancy.fast_dormancy_inhibit_seconds = Some(seconds);
+            assert!(cfg.validate().is_err(), "T323 {seconds}");
+        }
+    }
+
+    #[test]
+    fn a_parking_time_past_the_inactivity_release_is_accepted() {
+        let mut cfg = base_cfg();
+        cfg.rrc.inactivity_release_seconds = 180;
+        for after in [179, 180, 181, u16::MAX] {
+            cfg.rrc.dormancy.after_seconds = after;
+            cfg.validate().unwrap();
+        }
+        cfg.rrc.inactivity_release_seconds = 0;
+        cfg.rrc.inactivity_delete_seconds = 0;
+        cfg.validate().unwrap();
+        cfg.rrc.dormancy.after_seconds = 0;
+        cfg.rrc.inactivity_release_seconds = 1;
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn dormancy_state_uses_the_documented_names_and_rejects_unknown_keys() {
+        let original = serde_json::to_value(base_cfg()).unwrap();
+        assert_eq!(original["rrc"]["dormancy"]["state"], "cell_pch");
+        let mut value = original.clone();
+        value["rrc"]["dormancy"]["state"] = "ura_pch".into();
+        let cfg: Config = serde_json::from_value(value).unwrap();
+        assert_eq!(cfg.rrc.dormancy.state, DormancyState::UraPch);
+        let mut value = original.clone();
+        value["rrc"]["dormancy"]["state"] = "cell_fach".into();
+        assert!(serde_json::from_value::<Config>(value).is_err());
+        let mut value = original.clone();
+        value["rrc"]["dormancy"]["typo"] = 1.into();
+        assert!(serde_json::from_value::<Config>(value).is_err());
+        let mut value = original;
+        value["rrc"].as_object_mut().unwrap().remove("dormancy");
+        let cfg: Config = serde_json::from_value(value).unwrap();
+        assert_eq!(cfg.rrc.dormancy.after_seconds, 20);
+    }
+
+    #[test]
     fn serving_si_state_is_an_absolute_file_without_preflight_io() {
         let mut cfg = base_cfg();
         for path in ["", "relative.bin", "/"] {

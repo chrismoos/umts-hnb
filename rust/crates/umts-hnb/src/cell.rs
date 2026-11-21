@@ -24,7 +24,7 @@ use umts_rrc::{
         PrachSettings, PuncturingLimit, Signatures, Subchannels,
     },
     system_information::{
-        CsDomainInformation, NetworkMode, PsDomainInformation, Sib1, Sib7, Sib11,
+        CsDomainInformation, NetworkMode, PsDomainInformation, Sib1, Sib2, Sib7, Sib11,
     },
     transport::{
         ChannelCoding, CommonFormatGroup, CommonTransportFormatSet, ConvolutionalRate, CrcSize,
@@ -119,6 +119,7 @@ pub struct CellInformation {
     primary_code: PrimaryScramblingCode,
     layout: CommonLayout,
     sib1: Sib1,
+    sib2: Option<Sib2>,
     timers: UeTimerProfile,
     sib3: Sib3,
     sib5: Sib5,
@@ -150,6 +151,9 @@ impl CellInformation {
     }
     pub fn sib1(&self) -> &Sib1 {
         &self.sib1
+    }
+    pub fn sib2(&self) -> Option<&Sib2> {
+        self.sib2.as_ref()
     }
     pub fn timers(&self) -> &UeTimerProfile {
         &self.timers
@@ -230,7 +234,19 @@ impl CellPlan {
                 drx_coefficient: config.rrc.cn_drx_cycle_length_coefficient,
             }),
         };
-        let timers = UeTimerProfile::release_reference();
+        let mut timers = UeTimerProfile::release_reference();
+        if let Some(connected) = timers.connected.as_mut() {
+            connected.t323_seconds = config
+                .rrc
+                .dormancy
+                .effective_fast_dormancy_inhibit_seconds();
+        }
+        // TS 25.331 8.6.2.1: a UE in URA_PCH that finds no SIB2 repeats URA UPDATE.
+        let sib2 = (config.rrc.dormancy.enabled()
+            && config.rrc.dormancy.state == umts_config::DormancyState::UraPch)
+            .then_some(Sib2 {
+                ura_identity: config.rrc.ura_identity,
+            });
         let sib3 = Sib3 {
             cell_identity: config.cell.cell_id,
             sib4_available: false,
@@ -338,7 +354,7 @@ impl CellPlan {
         let sib11 = Sib11 {
             selection_measure: sib3.selection.measure,
         };
-        let encoded = [
+        let mut encoded = vec![
             (
                 SibType::Type1,
                 sib1.encode_with_timers(&timers)
@@ -366,6 +382,14 @@ impl CellPlan {
                 ReferenceTag::Value(tags.sib11()),
             ),
         ];
+        // SIB2 takes the positions after the other blocks, which keep theirs in every configuration.
+        if let Some(sib2) = &sib2 {
+            encoded.push((
+                SibType::Type2,
+                sib2.encode().map_err(|e| anyhow!("SIB2: {e:?}"))?,
+                ReferenceTag::Value(tags.sib2()),
+            ));
+        }
         let mut slots = (0..SI_PERIOD_FRAMES)
             .step_by(2)
             .filter(|frame| frame % MIB_PERIOD_FRAMES != 0);
@@ -402,6 +426,7 @@ impl CellPlan {
                 primary_code,
                 layout,
                 sib1,
+                sib2,
                 timers,
                 sib3,
                 sib5,
@@ -901,6 +926,130 @@ mod tests {
                 (18, SibType::Type11, None),
             ]
         );
+    }
+
+    fn cycle(plan: &CellPlan) -> Vec<BchMessage> {
+        (0..SI_PERIOD_FRAMES)
+            .step_by(2)
+            .map(|frame| {
+                BchMessage::decode(
+                    plan.schedule()
+                        .message_at(ChipInstant {
+                            epoch: epoch(),
+                            index: u64::from(frame) * CHIPS_PER_FRAME,
+                        })
+                        .unwrap(),
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dormancy_settings_change_nothing_on_air_while_parking_is_disabled() {
+        let disabled = || {
+            let mut config = config();
+            config.rrc.dormancy.after_seconds = 0;
+            config
+        };
+        let reference = compile(&disabled());
+        assert!(reference.information().sib2().is_none());
+        let connected = reference.information().timers().connected.as_ref().unwrap();
+        assert_eq!(connected.t323_seconds, None);
+        let mut config = disabled();
+        config.rrc.dormancy.state = umts_config::DormancyState::UraPch;
+        config.rrc.dormancy.drx_cycle_length_coefficient = 4;
+        config.rrc.dormancy.fast_dormancy_inhibit_seconds = Some(30);
+        let plan = compile(&config);
+        assert!(plan.information().sib2().is_none());
+        assert_eq!(cycle(&plan), cycle(&reference));
+    }
+
+    #[test]
+    fn enabled_dormancy_broadcasts_the_inhibit_timer_and_sib2_only_for_ura_pch() {
+        const SIB2_FRAME: u16 = 20;
+        let mut config = config();
+        config.rrc.dormancy.after_seconds = 0;
+        let reference = cycle(&compile(&config));
+        config.rrc.dormancy.after_seconds = 5;
+        let cell_pch = compile(&config);
+        assert!(cell_pch.information().sib2().is_none());
+        let connected = cell_pch.information().timers().connected.as_ref().unwrap();
+        assert_eq!(connected.t323_seconds, Some(5));
+        let sib1 = cell_pch
+            .information()
+            .sib1()
+            .encode_with_timers(cell_pch.information().timers())
+            .unwrap();
+        let sib1: umts_rrc_schema::information_elements::SysInfoType1 =
+            rasn::uper::decode(&sib1.bytes).unwrap();
+        assert_eq!(
+            sib1.v3a0_non_critical_extensions
+                .unwrap()
+                .v860_non_critical_extentions
+                .unwrap()
+                .sys_info_type1_v860ext
+                .ue_conn_timers_and_constants
+                .t_323,
+            Some(umts_rrc_schema::information_elements::T323::s5)
+        );
+        let parked = cycle(&cell_pch);
+        for (index, (actual, expected)) in parked.iter().zip(&reference).enumerate() {
+            let sib1 = matches!(
+                actual.payload,
+                BchPayload::CompleteShort {
+                    kind: SibType::Type1,
+                    ..
+                } | BchPayload::Complete {
+                    kind: SibType::Type1,
+                    ..
+                }
+            );
+            assert_eq!(actual == expected, !sib1, "position {index}");
+        }
+
+        config.rrc.dormancy.state = umts_config::DormancyState::UraPch;
+        config.rrc.dormancy.fast_dormancy_inhibit_seconds = Some(0);
+        config.rrc.ura_identity = 0xa5c3;
+        let ura_pch = compile(&config);
+        assert_eq!(
+            ura_pch.information().sib2().map(|sib2| sib2.ura_identity),
+            Some(0xa5c3)
+        );
+        let connected = ura_pch.information().timers().connected.as_ref().unwrap();
+        assert_eq!(connected.t323_seconds, Some(0));
+        let mut found = Vec::new();
+        for (message, expected) in cycle(&ura_pch).iter().zip(&reference) {
+            match &message.payload {
+                BchPayload::CompleteShort {
+                    kind: SibType::Type2,
+                    data,
+                } => {
+                    assert_eq!(data.bit_length(), 20);
+                    assert_eq!(data.bytes(), [0x0a, 0x5c, 0x30]);
+                    assert!(matches!(expected.payload, BchPayload::NoSegment));
+                    found.push(message.system_frame);
+                }
+                BchPayload::CompleteShort {
+                    kind: SibType::Type1 | SibType::MasterInformationBlock,
+                    ..
+                }
+                | BchPayload::Complete {
+                    kind: SibType::Type1 | SibType::MasterInformationBlock,
+                    ..
+                }
+                | BchPayload::Segment {
+                    kind: SibType::MasterInformationBlock,
+                    ..
+                }
+                | BchPayload::LastShort {
+                    kind: SibType::MasterInformationBlock,
+                    ..
+                } => {}
+                _ => assert_eq!(message, expected),
+            }
+        }
+        assert_eq!(found, [SIB2_FRAME]);
     }
 
     #[test]

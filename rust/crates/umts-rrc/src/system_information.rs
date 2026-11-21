@@ -11,6 +11,7 @@ use crate::{
 };
 use umts_rrc_schema::information_elements as ie;
 
+const URA_IDENTITY_BITS: usize = 16;
 const MIN_DRX: u8 = 6;
 const MAX_DRX: u8 = 9;
 const MIN_UL_INTERFERENCE_DBM: i16 = -110;
@@ -118,6 +119,28 @@ impl Sib1 {
                 ue_idle_timers_and_constants: Some(timers.idle),
                 v3a0_non_critical_extensions: timers.extensions,
             },
+        )
+        .map_err(SystemInformationError::Codec)
+    }
+}
+
+/// TS 25.331 8.6.2.1: a UE in URA_PCH whose URA identity is not listed here starts a URA update.
+pub struct Sib2 {
+    pub ura_identity: u16,
+}
+
+impl Sib2 {
+    pub fn encode(&self) -> Result<EncodedInformation, SystemInformationError> {
+        let mut identity = rasn::types::FixedBitString::<URA_IDENTITY_BITS>::default();
+        for index in 0..URA_IDENTITY_BITS {
+            identity.set(
+                index,
+                self.ura_identity & (1 << (URA_IDENTITY_BITS - 1 - index)) != 0,
+            );
+        }
+        generated_information::encode(
+            SibType::Type2,
+            &ie::SysInfoType2::new(ie::URAIdentityList(vec![ie::URAIdentity(identity)]), None),
         )
         .map_err(SystemInformationError::Codec)
     }
@@ -274,6 +297,34 @@ mod tests {
             .encode(),
             Err(SystemInformationError::NoDomains)
         ));
+    }
+
+    #[test]
+    fn sib2_lists_one_ura_identity_in_sixteen_bits() {
+        let encoded = Sib2 {
+            ura_identity: 0xa5c3,
+        }
+        .encode()
+        .unwrap();
+        // Extension absent, list length 1 of 1..8, then the identity.
+        assert_eq!(encoded.bit_length, 20);
+        assert_eq!(encoded.bytes, [0x0a, 0x5c, 0x30]);
+        for identity in [0, 100, 0xa5c3, u16::MAX] {
+            let encoded = Sib2 {
+                ura_identity: identity,
+            }
+            .encode()
+            .unwrap();
+            let decoded: ie::SysInfoType2 = generated_information::decode(&encoded).unwrap();
+            assert!(decoded.non_critical_extensions.is_none());
+            assert_eq!(decoded.ura_identity_list.0.len(), 1);
+            let bits = &decoded.ura_identity_list.0[0].0;
+            let value = bits
+                .iter()
+                .take(URA_IDENTITY_BITS)
+                .fold(0_u16, |value, bit| (value << 1) | u16::from(*bit));
+            assert_eq!(value, identity);
+        }
     }
 
     #[test]

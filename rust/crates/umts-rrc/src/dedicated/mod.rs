@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 mod activation;
+pub(crate) mod common_mapping;
 pub use activation::{ActivationMessage, ActivationProcedure};
 mod configuration;
 mod counters;
@@ -17,7 +18,8 @@ pub use configuration::{
 };
 pub use physical::{NormalDpch, UplinkPowerControl};
 pub use procedure::{
-    RadioBearerSetupProcedure, SetupPhase, SetupPublicationError, SetupResponse, SetupResponseError,
+    RadioBearerSetupProcedure, SetupMode, SetupPhase, SetupPublicationError, SetupResponse,
+    SetupResponseError,
 };
 pub use release::ExistingDchRelease;
 pub use release_procedure::RadioBearerReleaseProcedure;

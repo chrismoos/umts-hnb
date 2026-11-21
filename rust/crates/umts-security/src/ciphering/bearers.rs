@@ -237,6 +237,23 @@ impl BearerCiphers {
         self.register_initial_with(configurations, &[], publish)
     }
 
+    /// Drops the transparent-mode timelines of both domains once no transparent bearer uses
+    /// them. Their frame positions belong to one dedicated channel, so a UE that left CELL_DCH
+    /// starts new ones on its next channel (TS 25.331 8.5.15.1 restarts CFN counting).
+    pub fn forget_transparent_domains(&mut self, key: UeKey) -> Result<(), BearerCipherError> {
+        self.owner(key)?;
+        if self
+            .tables
+            .channels
+            .iter()
+            .any(|channel| matches!(channel, Channel::Transparent { .. }))
+        {
+            return Err(BearerCipherError::Layout);
+        }
+        self.tables.transparent = Default::default();
+        Ok(())
+    }
+
     /// Commit only after the removed RBs' actual RX/TX owners retire and their pending output is settled.
     pub fn unregister_batch_with<T, E>(
         &mut self,

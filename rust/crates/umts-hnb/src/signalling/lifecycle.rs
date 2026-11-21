@@ -238,7 +238,30 @@ impl CommonSignalling {
         {
             return Err(SignallingError::Phase);
         }
+        if context.dormancy.parked.is_some() {
+            // TS 25.331 8.1.2.3: a UE in a paging state is released by a page with the
+            // release indicator and sends no answer.
+            return if self.page_parked_release(key) {
+                Ok(())
+            } else {
+                Err(SignallingError::Capacity)
+            };
+        }
         queue_rrc_release(context, key, retries, false)
+    }
+
+    pub(crate) fn retire_released_parked(&mut self) -> Option<UeKey> {
+        let slot = (0..self.registry.capacity()).find(|slot| {
+            self.registry
+                .at_slot(*slot)
+                .is_some_and(|(_, context)| context.dormancy.release_paged)
+        })?;
+        let (key, _) = self.registry.at_slot(slot)?;
+        if self.core.push_rrc_release(key).is_err() {
+            return None;
+        }
+        self.retire_admitted(key);
+        Some(key)
     }
 }
 

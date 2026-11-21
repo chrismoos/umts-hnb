@@ -36,6 +36,10 @@ fn ue_overview(value: UeOverview) -> proto::Ue {
             EstablishmentPhase::Established if value.dedicated.is_some() => {
                 proto::RrcState::CellDch
             }
+            EstablishmentPhase::Established if value.parked.is_some() => match value.parked {
+                Some(umts_rrc::mobility::ParkedState::UraPch { .. }) => proto::RrcState::UraPch,
+                _ => proto::RrcState::CellPch,
+            },
             EstablishmentPhase::Established => proto::RrcState::CellFach,
             EstablishmentPhase::Closed => proto::RrcState::Releasing,
         }
@@ -425,6 +429,7 @@ impl<T: Transport, D: BoundDatagrams> ServingRuntime<T, D> {
                         "downlink_power.applied_attenuation_db",
                         u64::from(power.applied_attenuation_db),
                     ),
+                    counter("downlink_power.boost_db", u64::from(power.boost_db)),
                     counter(
                         "downlink_power.maximum_measurement_to_preparation_chips",
                         power.maximum_measurement_to_preparation_chips,
@@ -1057,6 +1062,7 @@ mod tests {
             imsi: Some(Imsi::from_digits("001010000000001").unwrap()),
             establishment: EstablishmentPhase::Established,
             dedicated: None,
+            parked: None,
             cs_connected: true,
             ps_connected: false,
             bearer_change_pending: false,

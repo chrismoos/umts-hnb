@@ -123,6 +123,16 @@ impl<'a> SetupAssignment<'a> {
     }
 }
 
+impl std::fmt::Debug for PendingRabAssignment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PendingRabAssignment")
+            .field("request", &self.request)
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
+}
+
 impl PendingRabAssignment {
     pub fn setup_selection(&self) -> Option<SetupAssignment<'_>> {
         (!self.assignment.setup.is_empty() && self.assignment.release.is_empty())
@@ -359,6 +369,38 @@ impl RabHandoff {
             outer_notifications,
         });
         Ok(true)
+    }
+
+    pub(crate) fn reoffer(&mut self, pending: &PendingRabAssignment) -> Result<(), HandoffError> {
+        if self.pending.len() == self.capacity.get() {
+            return Err(HandoffError::Capacity);
+        }
+        let wire = pending
+            .assignment
+            .encode(self.limits)
+            .map_err(HandoffError::Protocol)?;
+        let mut setup_rabs = Vec::new();
+        setup_rabs
+            .try_reserve_exact(pending.assignment.setup.len())
+            .map_err(|_| HandoffError::Capacity)?;
+        setup_rabs.extend(
+            pending
+                .assignment
+                .setup
+                .iter()
+                .map(|item| item.first.id.get()),
+        );
+        self.pending.push_back(EncodedAssignment {
+            committed: true,
+            request: pending.request,
+            received_at: pending.received_at,
+            kind: pending.kind,
+            setup_rabs,
+            wire,
+            notify_ies: Vec::new(),
+            outer_notifications: Vec::new(),
+        });
+        Ok(())
     }
 
     #[cfg(test)]

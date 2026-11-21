@@ -16,11 +16,12 @@ pub(super) enum MessageType {
     MeasurementControl,
     CellUpdateConfirm,
     PhysicalChannelReconfiguration,
+    UraUpdateConfirm,
 }
 
 #[derive(Default)]
 pub(super) struct Transactions {
-    last: [Option<TransactionId>; 10],
+    last: [Option<TransactionId>; 11],
 }
 
 impl Transactions {

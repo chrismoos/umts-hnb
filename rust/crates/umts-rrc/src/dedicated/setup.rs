@@ -19,6 +19,8 @@ const MAX_RB_PER_RAB: usize = 8;
 
 #[path = "setup_hsdpa.rs"]
 mod hsdpa;
+#[path = "setup_resume.rs"]
+mod resume;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewRab {
@@ -365,7 +367,7 @@ fn rab_wire(
             ie::RBIdentity(id),
             pdcp,
             bearer.rlc.wire(),
-            bearer.mapping.wire(),
+            bearer.mapping_info(),
         ));
     }
     Ok(ie::RABInformationSetup::new(
@@ -407,6 +409,67 @@ fn build(
     .map_err(DedicatedError::Codec)
 }
 
+pub(super) struct TransportContent {
+    pub(super) uplink_common: ie::ULCommonTransChInfo,
+    pub(super) uplink_channels: ie::ULAddReconfTransChInfoList,
+    pub(super) downlink_common: ie::DLCommonTransChInfo,
+    pub(super) downlink_channels: ie::DLAddReconfTransChInfoList,
+}
+
+impl TransportContent {
+    pub(super) fn new(configuration: &Rel99Configuration) -> Result<Self, DedicatedError> {
+        let uplink = configuration
+            .uplink()
+            .transports()
+            .iter()
+            .map(|transport| {
+                Ok(ie::ULAddReconfTransChInformation::new(
+                    ie::ULTrCHType::dch,
+                    ie::TransportChannelIdentity(transport.id),
+                    transport.wire_uplink()?,
+                ))
+            })
+            .collect::<Result<_, DedicatedError>>()?;
+        let downlink = configuration
+            .downlink()
+            .transports()
+            .iter()
+            .map(|transport| {
+                Ok(ie::DLAddReconfTransChInformation::new(
+                    ie::DLTrCHType::dch,
+                    ie::TransportChannelIdentity(transport.id),
+                    ie::DLAddReconfTransChInformationTfsSignallingMode::explicit_config(
+                        transport.wire_downlink()?,
+                    ),
+                    None,
+                    None,
+                ))
+            })
+            .collect::<Result<_, DedicatedError>>()?;
+        Ok(Self {
+            uplink_common: ie::ULCommonTransChInfo::new(
+                None,
+                None,
+                Some(ie::ULCommonTransChInfoModeSpecificInfo::fdd(
+                    ie::ULCommonTransChInfoModeSpecificInfoFdd::new(configuration.uplink().wire()?),
+                )),
+            ),
+            uplink_channels: ie::ULAddReconfTransChInfoList(uplink),
+            downlink_common: ie::DLCommonTransChInfo::new(
+                None,
+                ie::DLCommonTransChInfoModeSpecificInfo::fdd(
+                    ie::DLCommonTransChInfoModeSpecificInfoFdd::new(Some(
+                        ie::DLCommonTransChInfoModeSpecificInfoFddDlParameters::dl_DCH_TFCS(
+                            configuration.downlink().wire()?,
+                        ),
+                    )),
+                ),
+            ),
+            downlink_channels: ie::DLAddReconfTransChInfoList(downlink),
+        })
+    }
+}
+
 fn body_r3(
     configuration: &Rel99Configuration,
     retained: &[RetainedBearer],
@@ -415,34 +478,7 @@ fn body_r3(
     previous: Option<&Rel99Configuration>,
     activation: Option<ScheduledActivation>,
 ) -> Result<pdu::RadioBearerSetupR3IEs, DedicatedError> {
-    let uplink = configuration
-        .uplink()
-        .transports()
-        .iter()
-        .map(|transport| {
-            Ok(ie::ULAddReconfTransChInformation::new(
-                ie::ULTrCHType::dch,
-                ie::TransportChannelIdentity(transport.id),
-                transport.wire_uplink()?,
-            ))
-        })
-        .collect::<Result<_, DedicatedError>>()?;
-    let downlink = configuration
-        .downlink()
-        .transports()
-        .iter()
-        .map(|transport| {
-            Ok(ie::DLAddReconfTransChInformation::new(
-                ie::DLTrCHType::dch,
-                ie::TransportChannelIdentity(transport.id),
-                ie::DLAddReconfTransChInformationTfsSignallingMode::explicit_config(
-                    transport.wire_downlink()?,
-                ),
-                None,
-                None,
-            ))
-        })
-        .collect::<Result<_, DedicatedError>>()?;
+    let transport = TransportContent::new(configuration)?;
     // The first CELL_DCH setup also deletes the CELL_FACH setup's placeholder DCH (TS 25.331
     // 8.6.5.7 and 8.6.5.8), so the UE holds no transport channel outside the new TFCS.
     let placeholder = crate::establishment::UNUSED_DCH_ID;
@@ -504,7 +540,7 @@ fn body_r3(
             }
             Some(ie::RBInformationAffected::new(
                 ie::RBIdentity(old.id),
-                bearer.mapping.wire(),
+                bearer.mapping_info(),
             ))
         })
         .collect();
@@ -528,30 +564,15 @@ fn body_r3(
         rb_information_affected_list: (!affected.is_empty())
             .then_some(ie::RBInformationAffectedList(affected)),
         dl_counter_synchronisation_info: None,
-        ul_common_trans_ch_info: Some(ie::ULCommonTransChInfo::new(
-            None,
-            None,
-            Some(ie::ULCommonTransChInfoModeSpecificInfo::fdd(
-                ie::ULCommonTransChInfoModeSpecificInfoFdd::new(configuration.uplink().wire()?),
-            )),
-        )),
+        ul_common_trans_ch_info: Some(transport.uplink_common),
         ul_deleted_trans_ch_info_list: (!deleted_ul.is_empty())
             .then_some(ie::ULDeletedTransChInfoList(deleted_ul)),
-        ul_add_reconf_trans_ch_info_list: Some(ie::ULAddReconfTransChInfoList(uplink)),
+        ul_add_reconf_trans_ch_info_list: Some(transport.uplink_channels),
         dummy: None,
-        dl_common_trans_ch_info: Some(ie::DLCommonTransChInfo::new(
-            None,
-            ie::DLCommonTransChInfoModeSpecificInfo::fdd(
-                ie::DLCommonTransChInfoModeSpecificInfoFdd::new(Some(
-                    ie::DLCommonTransChInfoModeSpecificInfoFddDlParameters::dl_DCH_TFCS(
-                        configuration.downlink().wire()?,
-                    ),
-                )),
-            ),
-        )),
+        dl_common_trans_ch_info: Some(transport.downlink_common),
         dl_deleted_trans_ch_info_list: (!deleted_dl.is_empty())
             .then_some(ie::DLDeletedTransChInfoList(deleted_dl)),
-        dl_add_reconf_trans_ch_info_list: Some(ie::DLAddReconfTransChInfoList(downlink)),
+        dl_add_reconf_trans_ch_info_list: Some(transport.downlink_channels),
         frequency_info: None,
         max_allowed_ul_tx_power: physical_changed.then_some(ie::MaxAllowedULTXPower(
             configuration.physical().maximum_uplink_dbm,

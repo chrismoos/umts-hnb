@@ -4,6 +4,8 @@ use super::*;
 
 const MAXIMUM_ATTENUATION_DB: usize = 60;
 const TPC_STEP_DB: f32 = 1.0;
+// The nominal power fits every handset the cell can hold. Fewer handsets leave the rest unused.
+pub(crate) const MAXIMUM_BOOST_DB: u8 = 6;
 
 #[derive(Clone, Copy, Debug)]
 pub struct DownlinkPowerSettings {
@@ -35,6 +37,7 @@ pub struct DownlinkPowerCounters {
     pub stale: u64,
     pub attenuation_db: u8,
     pub applied_attenuation_db: u8,
+    pub boost_db: u8,
     pub maximum_measurement_to_preparation_chips: u64,
 }
 
@@ -42,6 +45,7 @@ pub struct DownlinkPowerCounters {
 pub(super) struct DownlinkPower {
     gains: [f32; MAXIMUM_ATTENUATION_DB + 1],
     maximum_attenuation: u8,
+    boost_limit: u8,
     maximum_age_chips: u64,
     last: Option<ChipInstant>,
     last_applied: Option<ChipInstant>,
@@ -61,6 +65,7 @@ impl DownlinkPower {
         Ok(Self {
             gains: std::array::from_fn(|index| 10.0_f32.powf(-(index as f32) * TPC_STEP_DB / 20.0)),
             maximum_attenuation: (range / TPC_STEP_DB).floor() as u8,
+            boost_limit: 0,
             maximum_age_chips: settings.maximum_age_chips,
             last: None,
             last_applied: None,
@@ -86,15 +91,23 @@ impl DownlinkPower {
                 self.counters.up = self.counters.up.saturating_add(1);
                 self.counters.attenuation_db = attenuation.saturating_sub(1);
                 if attenuation == 0 {
-                    self.counters.clamped = self.counters.clamped.saturating_add(1);
+                    if self.counters.boost_db < self.boost_limit {
+                        self.counters.boost_db += 1;
+                    } else {
+                        self.counters.clamped = self.counters.clamped.saturating_add(1);
+                    }
                 }
             }
             DownlinkCommand::Down => {
                 self.counters.down = self.counters.down.saturating_add(1);
-                self.counters.attenuation_db =
-                    attenuation.saturating_add(1).min(self.maximum_attenuation);
-                if attenuation == self.maximum_attenuation {
-                    self.counters.clamped = self.counters.clamped.saturating_add(1);
+                if self.counters.boost_db > 0 {
+                    self.counters.boost_db -= 1;
+                } else {
+                    self.counters.attenuation_db =
+                        attenuation.saturating_add(1).min(self.maximum_attenuation);
+                    if attenuation == self.maximum_attenuation {
+                        self.counters.clamped = self.counters.clamped.saturating_add(1);
+                    }
                 }
             }
             DownlinkCommand::Hold => self.counters.hold = self.counters.hold.saturating_add(1),
@@ -113,6 +126,12 @@ impl DownlinkPower {
         }
         self.counters.applied_attenuation_db = self.counters.attenuation_db;
         self.gains[usize::from(self.counters.attenuation_db)]
+            / self.gains[usize::from(self.counters.boost_db)]
+    }
+
+    pub fn limit_boost(&mut self, limit: u8) {
+        self.boost_limit = limit.min(MAXIMUM_BOOST_DB);
+        self.counters.boost_db = self.counters.boost_db.min(self.boost_limit);
     }
 
     pub fn inherit(&mut self, previous: Self) {
@@ -127,6 +146,43 @@ impl DownlinkPower {
 mod tests {
     use super::*;
     use crate::{dedicated_tx::tests::identity, test_support::at};
+
+    #[test]
+    fn boost_above_nominal_is_bounded_by_its_limit_and_returns_first() {
+        let mut power = DownlinkPower::new(DownlinkPowerSettings {
+            initial_offset_db: 0.0,
+            minimum_offset_db: -6.0,
+            maximum_age_chips: 10_000,
+        })
+        .unwrap();
+        let mut slot = 0;
+        let mut step = |power: &mut DownlinkPower, command| {
+            slot += 1;
+            power.observe(
+                DownlinkControl {
+                    identity: identity(0, 1),
+                    measurement_end: at(slot),
+                    command,
+                },
+                at(slot),
+            );
+        };
+        step(&mut power, DownlinkCommand::Up);
+        assert_eq!((power.counters.boost_db, power.counters.clamped), (0, 1));
+        power.limit_boost(9);
+        for _ in 0..8 {
+            step(&mut power, DownlinkCommand::Up);
+        }
+        assert_eq!(power.counters.boost_db, MAXIMUM_BOOST_DB);
+        assert!((power.latch_gain(at(100)) - 10.0_f32.powf(6.0 / 20.0)).abs() < 1e-5);
+        step(&mut power, DownlinkCommand::Down);
+        assert_eq!(
+            (power.counters.boost_db, power.counters.attenuation_db),
+            (5, 0)
+        );
+        power.limit_boost(2);
+        assert_eq!(power.counters.boost_db, 2);
+    }
 
     #[test]
     fn commands_clamp_hold_and_reject_replay_without_absolute_power_thresholds() {

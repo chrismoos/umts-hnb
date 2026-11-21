@@ -27,6 +27,7 @@ use umts_types::{
 mod addition;
 pub use addition::{AdditionalServiceError, AdditionalServiceSettings};
 mod cleanup;
+mod dormancy;
 mod hsdpa;
 mod hsupa;
 pub use hsdpa::{

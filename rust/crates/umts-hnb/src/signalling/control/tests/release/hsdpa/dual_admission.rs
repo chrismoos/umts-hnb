@@ -83,7 +83,11 @@ fn dual_admission_cannot_replace_an_unsignalled_single_cell_link() {
     assert_eq!(session.phase(), Phase::Prepared);
     assert_eq!(session.carriers().collect::<Vec<_>>(), [CarrierId::Primary]);
     assert!(!session.data_publication_allowed(CarrierId::Secondary));
-    assert_eq!(cell.available_bytes(), 32_000_000);
+    // Shared HSDPA plan tables stay with the cell.
+    assert_eq!(
+        cell.available_bytes() + cell.tables().retained_bytes(),
+        32_000_000
+    );
     session.begin_retirement();
     assert_eq!(session.phase(), Phase::Retiring);
     assert!(!session.data_publication_allowed(CarrierId::Primary));

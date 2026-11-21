@@ -5,6 +5,7 @@ mod bootstrap;
 mod circuit_settings;
 mod cleanup;
 mod dedicated;
+mod dormancy;
 mod downlink_power;
 mod hsdpa;
 mod hsupa;

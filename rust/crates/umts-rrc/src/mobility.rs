@@ -10,6 +10,13 @@ use umts_rrc_schema::{
     information_elements as ie, pdu_definitions as pdu,
 };
 
+pub(crate) mod parked;
+pub use parked::{
+    ConfirmTarget, ParkedState, UraUpdate, UraUpdateCause, build_cell_update_confirm,
+    build_park_reconfiguration, build_ura_update_confirm, cell_update_confirm_message,
+    inspect_ura_update, park_reconfiguration_message, ura_update_confirm_message, ura_update_urnti,
+};
+
 const RNC_BITS: usize = 12;
 const SRNTI_BITS: usize = 20;
 const CRNTI_BITS: usize = 16;
@@ -86,18 +93,37 @@ pub enum UpdateCause {
     Extended,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateFailureCause {
+    ConfigurationUnsupported,
+    PhysicalChannelFailure,
+    IncompatibleSimultaneousReconfiguration,
+    ProtocolError,
+    CellUpdateOccurred,
+    InvalidConfiguration,
+    ConfigurationIncomplete,
+    Other,
+}
+/// TS 25.331 8.3.1.3: the transaction is that of the CELL UPDATE CONFIRM the UE could not apply.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UpdateFailure {
+    pub transaction: u8,
+    pub cause: UpdateFailureCause,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CellUpdate {
     pub urnti: u32,
     pub starts: DomainStarts,
     pub cause: UpdateCause,
     pub signalling_rlc_error: bool,
     pub user_rlc_error: bool,
+    pub failure: Option<UpdateFailure>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MobilityError {
     Message,
     Identity,
     Starts,
+    DrxCoefficient,
     Codec(CodecError),
 }
 
@@ -129,6 +155,31 @@ pub fn inspect_cell_update(
         cause,
         signalling_rlc_error: message.am_rlc_error_indication_rb2_3or4,
         user_rlc_error: message.am_rlc_error_indication_rb5or_above,
+        failure: message.failure_cause.as_ref().map(|failure| UpdateFailure {
+            transaction: failure.rrc_transaction_identifier.0,
+            cause: match failure.failure_cause {
+                ie::FailureCauseWithProtErr::configurationUnsupported(()) => {
+                    UpdateFailureCause::ConfigurationUnsupported
+                }
+                ie::FailureCauseWithProtErr::physicalChannelFailure(()) => {
+                    UpdateFailureCause::PhysicalChannelFailure
+                }
+                ie::FailureCauseWithProtErr::incompatibleSimultaneousReconfiguration(()) => {
+                    UpdateFailureCause::IncompatibleSimultaneousReconfiguration
+                }
+                ie::FailureCauseWithProtErr::protocolError(_) => UpdateFailureCause::ProtocolError,
+                ie::FailureCauseWithProtErr::cellUpdateOccurred(()) => {
+                    UpdateFailureCause::CellUpdateOccurred
+                }
+                ie::FailureCauseWithProtErr::invalidConfiguration(()) => {
+                    UpdateFailureCause::InvalidConfiguration
+                }
+                ie::FailureCauseWithProtErr::configurationIncomplete(()) => {
+                    UpdateFailureCause::ConfigurationIncomplete
+                }
+                _ => UpdateFailureCause::Other,
+            },
+        }),
     })
 }
 
@@ -136,7 +187,18 @@ pub fn cell_update_urnti(decoded: &DecodedUplinkCommon) -> Result<u32, MobilityE
     let ULCCCHMessageType::cellUpdate(message) = &decoded.value.message else {
         return Err(MobilityError::Message);
     };
-    Ok((word(&message.u_rnti.srnc_identity.0) << SRNTI_BITS) | word(&message.u_rnti.s_rnti.0))
+    Ok(urnti_word(&message.u_rnti))
+}
+
+pub(crate) fn urnti_wire(urnti: u32) -> ie::URNTI {
+    ie::URNTI::new(
+        ie::SRNCIdentity(fixed::<RNC_BITS>(urnti >> SRNTI_BITS)),
+        ie::SRNTI(fixed::<SRNTI_BITS>(urnti)),
+    )
+}
+
+pub(crate) fn urnti_word(identity: &ie::URNTI) -> u32 {
+    (word(&identity.srnc_identity.0) << SRNTI_BITS) | word(&identity.s_rnti.0)
 }
 
 pub fn build_signalling_failure_release(
@@ -161,16 +223,13 @@ pub fn build_cell_update_confirm_ccch(
     transaction: TransactionId,
     new_crnti: Option<u16>,
 ) -> Result<EncodedRrc, MobilityError> {
-    let identity = ie::URNTI::new(
-        ie::SRNCIdentity(fixed::<RNC_BITS>(urnti >> SRNTI_BITS)),
-        ie::SRNTI(fixed::<SRNTI_BITS>(urnti)),
-    );
+    let identity = urnti_wire(urnti);
     let message = DLCCCHMessage::new(
         None,
         DLCCCHMessageType::cellUpdateConfirm(pdu::CellUpdateConfirmCCCH::r3(
             pdu::CellUpdateConfirmCCCHR3::new(
                 identity,
-                cell_update_confirm_ies(transaction, new_crnti),
+                parked::confirm_ies(transaction, ConfirmTarget::Fach { new_crnti })?,
                 None,
             ),
         )),
@@ -184,63 +243,14 @@ pub fn build_cell_update_confirm_dcch(
     transaction: TransactionId,
     new_crnti: Option<u16>,
 ) -> DLDCCHMessage {
-    DLDCCHMessage::new(
-        None,
-        DLDCCHMessageType::cellUpdateConfirm(pdu::CellUpdateConfirm::r3(
-            pdu::CellUpdateConfirmR3::new(cell_update_confirm_ies(transaction, new_crnti), None),
-        )),
-    )
-}
-
-fn cell_update_confirm_ies(
-    transaction: TransactionId,
-    new_crnti: Option<u16>,
-) -> pdu::CellUpdateConfirmR3IEs {
-    pdu::CellUpdateConfirmR3IEs {
-        rrc_transaction_identifier: ie::RRCTransactionIdentifier(transaction.get()),
-        integrity_protection_mode_info: None,
-        ciphering_mode_info: None,
-        activation_time: None,
-        new_u_rnti: None,
-        new_c_rnti: new_crnti.map(|value| ie::CRNTI(fixed::<CRNTI_BITS>(u32::from(value)))),
-        rrc_state_indicator: ie::RRCStateIndicator::cell_FACH,
-        utran_drx_cycle_length_coeff: None,
-        rlc_re_establish_indicator_rb2_3or4: false,
-        rlc_re_establish_indicator_rb5or_above: false,
-        cn_information_info: None,
-        ura_identity: None,
-        rb_information_release_list: None,
-        rb_information_reconfig_list: None,
-        rb_information_affected_list: None,
-        dl_counter_synchronisation_info: None,
-        ul_common_trans_ch_info: None,
-        ul_deleted_trans_ch_info_list: None,
-        ul_add_reconf_trans_ch_info_list: None,
-        mode_specific_trans_ch_info: pdu::CellUpdateConfirmR3IEsModeSpecificTransChInfo::fdd(
-            pdu::CellUpdateConfirmR3IEsModeSpecificTransChInfoFdd::new(None, None),
-        ),
-        dl_common_trans_ch_info: None,
-        dl_deleted_trans_ch_info_list: None,
-        dl_add_reconf_trans_ch_info_list: None,
-        frequency_info: None,
-        max_allowed_ul_tx_power: None,
-        ul_channel_requirement: None,
-        mode_specific_phys_ch_info: pdu::CellUpdateConfirmR3IEsModeSpecificPhysChInfo::fdd(
-            pdu::CellUpdateConfirmR3IEsModeSpecificPhysChInfoFdd::new(None),
-        ),
-        dl_common_information: None,
-        dl_information_per_rl_list: None,
-    }
+    parked::confirm_message(parked::fach_confirm_ies(transaction, new_crnti))
 }
 
 fn build_release_for_urnti(
     urnti: u32,
     transaction: TransactionId,
 ) -> Result<EncodedRrc, MobilityError> {
-    let identity = ie::URNTI::new(
-        ie::SRNCIdentity(fixed::<RNC_BITS>(urnti >> SRNTI_BITS)),
-        ie::SRNTI(fixed::<SRNTI_BITS>(urnti)),
-    );
+    let identity = urnti_wire(urnti);
     let message = DLCCCHMessage::new(
         None,
         DLCCCHMessageType::rrcConnectionRelease(pdu::RRCConnectionReleaseCCCH::r3(

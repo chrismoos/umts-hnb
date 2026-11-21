@@ -624,6 +624,9 @@ pub(super) fn default_rrc_inactivity_delete_seconds() -> u32 {
 pub(super) fn default_rrc_combined_bearer_setup() -> bool {
     true
 }
+pub(super) fn default_dormancy_drx_cycle_length_coefficient() -> u8 {
+    6
+}
 pub(super) fn default_prach_signature() -> u8 {
     13
 }
@@ -1834,6 +1837,74 @@ pub enum RrcReleaseTransportPolicy {
     RemoveTransports,
 }
 
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DormancyState {
+    #[default]
+    #[serde(rename = "cell_pch")]
+    CellPch,
+    #[serde(rename = "ura_pch")]
+    UraPch,
+}
+
+// TS 25.331 10.3.3.43 lists the T323 values.
+const FAST_DORMANCY_INHIBIT_SECONDS: [u8; 8] = [0, 5, 10, 20, 30, 60, 90, 120];
+const DEFAULT_FAST_DORMANCY_INHIBIT_SECONDS: u8 = 5;
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DormancyConfig {
+    #[doc = "Seconds without packets or NAS before an inactive packet handset is moved to the parked state. Zero disables parking."]
+    #[serde(default = "default_dormancy_after_seconds")]
+    pub after_seconds: u16,
+    #[doc = "Parked RRC state: cell_pch or ura_pch. ura_pch broadcasts rrc.ura_identity in SIB2."]
+    #[serde(default)]
+    pub state: DormancyState,
+    #[doc = "TS25.331 UTRAN DRX cycle length coefficient (3..9). The paging cycle is 2^k frames."]
+    #[serde(default = "default_dormancy_drx_cycle_length_coefficient")]
+    pub drx_cycle_length_coefficient: u8,
+    #[doc = "T323 in seconds (0, 5, 10, 20, 30, 60, 90 or 120), broadcast only while parking is enabled. Null selects 5."]
+    #[serde(default)]
+    pub fast_dormancy_inhibit_seconds: Option<u8>,
+}
+fn default_dormancy_after_seconds() -> u16 {
+    20
+}
+impl Default for DormancyConfig {
+    fn default() -> Self {
+        Self {
+            after_seconds: default_dormancy_after_seconds(),
+            state: DormancyState::default(),
+            drx_cycle_length_coefficient: default_dormancy_drx_cycle_length_coefficient(),
+            fast_dormancy_inhibit_seconds: None,
+        }
+    }
+}
+impl DormancyConfig {
+    pub fn enabled(&self) -> bool {
+        self.after_seconds != 0
+    }
+    pub fn effective_fast_dormancy_inhibit_seconds(&self) -> Option<u8> {
+        self.enabled().then_some(
+            self.fast_dormancy_inhibit_seconds
+                .unwrap_or(DEFAULT_FAST_DORMANCY_INHIBIT_SECONDS),
+        )
+    }
+    pub fn validate_schema(&self) -> anyhow::Result<()> {
+        if !(3..=9).contains(&self.drx_cycle_length_coefficient) {
+            anyhow::bail!("DormancyConfig.drx_cycle_length_coefficient outside 3..=9");
+        }
+        if self
+            .fast_dormancy_inhibit_seconds
+            .is_some_and(|value| !FAST_DORMANCY_INHIBIT_SECONDS.contains(&value))
+        {
+            anyhow::bail!(
+                "DormancyConfig.fast_dormancy_inhibit_seconds must be 0, 5, 10, 20, 30, 60, 90, 120 or null"
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct RrcConfig {
@@ -1867,6 +1938,9 @@ pub struct RrcConfig {
     #[doc = "Allow joint bearer construction; radio.cs_ps_combined_data separately controls in-call data policy."]
     #[serde(default = "default_rrc_combined_bearer_setup")]
     pub combined_bearer_setup: bool,
+    #[doc = "Parking of inactive packet handsets in CELL_PCH or URA_PCH."]
+    #[serde(default)]
+    pub dormancy: DormancyConfig,
 }
 impl Default for RrcConfig {
     fn default() -> Self {
@@ -1881,11 +1955,22 @@ impl Default for RrcConfig {
             release_complete_retransmissions: default_rrc_release_complete_retransmissions(),
             inactivity_delete_seconds: default_rrc_inactivity_delete_seconds(),
             combined_bearer_setup: default_rrc_combined_bearer_setup(),
+            dormancy: DormancyConfig::default(),
         }
     }
 }
 impl RrcConfig {
+    /// The UTRAN DRX cycle length coefficient for RRC CONNECTION SETUP. A cell that never
+    /// parks a handset keeps sending the CN value.
+    pub fn utran_drx_cycle_length_coefficient(&self) -> u8 {
+        if self.dormancy.enabled() {
+            self.dormancy.drx_cycle_length_coefficient
+        } else {
+            self.cn_drx_cycle_length_coefficient
+        }
+    }
     pub fn validate_schema(&self) -> anyhow::Result<()> {
+        self.dormancy.validate_schema()?;
         if !(0..=4095).contains(&self.srnc_id) {
             anyhow::bail!("RrcConfig.srnc_id outside 0..=4095");
         }

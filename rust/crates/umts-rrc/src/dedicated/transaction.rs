@@ -234,6 +234,14 @@ impl<C: Clone + Eq, F: Clone + Eq> Transaction<C, F> {
         self.previous = time.serviced();
         Ok(result)
     }
+    pub(crate) fn reported_failure(&mut self, now: ChipInstant) -> Result<(), DedicatedError> {
+        self.time(now)?;
+        if self.phase != ReconfigurationPhase::AwaitingComplete {
+            return Err(DedicatedError::Phase);
+        }
+        self.phase = ReconfigurationPhase::FailureReported;
+        Ok(())
+    }
     pub(crate) fn expire(&mut self, now: ChipInstant) -> Result<bool, DedicatedError> {
         self.time(now)?;
         let next = match self.phase {

@@ -315,19 +315,21 @@ impl InitialConfiguration {
                     .pop()
                     .ok_or(DedicatedError::Mapping)?
                     .ul_logical_channel_mappings;
+                let mut options = vec![ie::RBMappingOptionR5::new(
+                    uplink,
+                    Some(ie::DLLogicalChannelMappingListR5(vec![
+                        ie::DLLogicalChannelMappingR5::new(
+                            ie::DLTransportChannelTypeR5::hsdsch(ie::MACDFlowIdentity(
+                                mapping.flow,
+                            )),
+                            mapping.logical.map(ie::LogicalChannelIdentity),
+                        ),
+                    ])),
+                )];
+                options.extend(bearer.common_channel().map(|common| common.option_r5()));
                 Ok(ie::RBInformationAffectedR5::new(
                     ie::RBIdentity(mapping.bearer),
-                    ie::RBMappingInfoR5(vec![ie::RBMappingOptionR5::new(
-                        uplink,
-                        Some(ie::DLLogicalChannelMappingListR5(vec![
-                            ie::DLLogicalChannelMappingR5::new(
-                                ie::DLTransportChannelTypeR5::hsdsch(ie::MACDFlowIdentity(
-                                    mapping.flow,
-                                )),
-                                mapping.logical.map(ie::LogicalChannelIdentity),
-                            ),
-                        ])),
-                    )]),
+                    ie::RBMappingInfoR5(options),
                 ))
             })
             .collect::<Result<Vec<_>, DedicatedError>>()?;

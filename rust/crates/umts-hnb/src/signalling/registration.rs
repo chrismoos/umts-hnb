@@ -112,6 +112,20 @@ impl CommonSignalling {
         {
             return Ok(ConnectionReleaseProgress::PendingNasDelivery);
         }
+        if context.dormancy.parked.is_some() {
+            router
+                .release_unsignalled(connection)
+                .map_err(SignallingError::Nas)?;
+            context
+                .security
+                .release_signalling(domain.into())
+                .map_err(super::security_error)?;
+            context.release_after_core_disconnect =
+                router.connections().iter().all(Option::is_none);
+            return Ok(ConnectionReleaseProgress::Complete);
+        }
+        let releasing = context.idle_release.is_some();
+        let exchange = context.protection.integrity.pending_origin();
         let bearer = &mut context.control;
         router
             .release_scheduled_with(
@@ -130,10 +144,16 @@ impl CommonSignalling {
                         .map_err(SignallingError::Am)
                 },
             )
-            .map_err(|error| match error {
-                umts_rrc::nas::NasScheduledError::Nas(error) => SignallingError::Nas(error),
-                umts_rrc::nas::NasScheduledError::Schedule(error) => {
-                    super::protection::schedule_error(error, |error| error)
+            .map_err(|error| {
+                tracing::debug!(
+                    "Signalling connection release not sent: key={key:?} domain={domain:?} rrc_releasing={releasing} security_exchange={exchange:?} schedule_error={}",
+                    matches!(error, umts_rrc::nas::NasScheduledError::Schedule(_))
+                );
+                match error {
+                    umts_rrc::nas::NasScheduledError::Nas(error) => SignallingError::Nas(error),
+                    umts_rrc::nas::NasScheduledError::Schedule(error) => {
+                        super::protection::schedule_error(error, |error| error)
+                    }
                 }
             })?;
         context
@@ -195,6 +215,9 @@ impl CommonSignalling {
             }
             context.router = None;
             context.registration = Registration::ReleaseRequired(reason);
+            // No core connection can open any more, so the RRC connection is released now
+            // instead of at the inactivity timer while the UE keeps retrying its NAS.
+            context.release_after_core_disconnect = true;
         }
     }
 
@@ -212,6 +235,7 @@ impl CommonSignalling {
                 context.router = None;
                 context.registration =
                     Registration::ReleaseRequired(RegistrationFailure::CoreUnavailable);
+                context.release_after_core_disconnect = true;
             }
         }
         self.gateway_contexts.clear();
@@ -346,6 +370,7 @@ fn publish_identity(
                 Identity::Unavailable => {
                     context.registration =
                         Registration::ReleaseRequired(RegistrationFailure::IdentityUnavailable);
+                    context.release_after_core_disconnect = true;
                 }
             }
             Ok(())
@@ -462,6 +487,7 @@ pub(super) fn poll_identification(
         .map_err(identity_error)?;
     if poll == Poll::Expired {
         context.registration = Registration::ReleaseRequired(RegistrationFailure::IdentityTimeout);
+        context.release_after_core_disconnect = true;
     }
     Ok(())
 }

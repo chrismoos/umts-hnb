@@ -33,7 +33,7 @@ fn algorithm2_holds_and_adjustments_follow_each_ues_offset_frame_across_cfn_wrap
     second.anchor = at(1024);
     second.identity = Some(identity(1, 2));
     second.grouped = Some(GroupedTpc::new(0));
-    measured(&mut first, 0, 64, 1.0);
+    measured(&mut first, 0, 64, 5.0);
     measured(&mut second, 0, 64, 20.0);
     for slot in 0_u64..30 {
         if slot == 11 {
@@ -137,6 +137,16 @@ fn an_expired_measurement_cannot_start_a_new_correction_group() {
 }
 
 #[test]
+fn algorithm2_corrects_every_group_while_far_below_target() {
+    let mut lane = initialization_lane(0, initialization(true, 1, 100));
+    lane.grouped = Some(GroupedTpc::new(2));
+    measured(&mut lane, 0, 64, 1.0);
+    for slot in 0_u64..15 {
+        assert_eq!(command(&mut lane, slot), Ok(Bit::One), "slot {slot}");
+    }
+}
+
+#[test]
 fn algorithm2_corrects_every_group_while_far_above_target() {
     let mut lane = initialization_lane(0, initialization(true, 1, 100));
     lane.grouped = Some(GroupedTpc::new(2));
@@ -205,7 +215,7 @@ fn admission_uses_the_advertised_algorithm_and_rejects_invalid_group_configurati
         install(&mut runtime, &mut ports, owner);
         let lane = runtime.tpc_lane_mut(identity(slot as u32, 1)).unwrap();
         assert_eq!(lane.grouped.is_some(), slot == 1);
-        measured(lane, 0, 64, 1.0);
+        measured(lane, 0, 64, 5.0);
         for air_slot in 0_u64..5 {
             let expected = if slot == 0 {
                 Bit::One

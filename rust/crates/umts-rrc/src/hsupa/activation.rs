@@ -447,10 +447,14 @@ impl ActivationEncoding<'_> {
                 }
                 Ok(ie::RBInformationAffectedR6::new(
                     ie::RBIdentity(mapping.bearer),
-                    ie::RBMappingInfoR6(vec![ie::RBMappingOptionR6::new(
-                        Some(mapping.uplink.wire().map_err(|_| DedicatedError::Mapping)?),
-                        downlink.map(ie::DLLogicalChannelMappingListR5),
-                    )]),
+                    ie::RBMappingInfoR6(vec![
+                        ie::RBMappingOptionR6::new(
+                            Some(mapping.uplink.wire().map_err(|_| DedicatedError::Mapping)?),
+                            downlink.map(ie::DLLogicalChannelMappingListR5),
+                        ),
+                        crate::dedicated::common_mapping::CommonChannel::for_bearer(mapping.bearer)
+                            .option_r6(),
+                    ]),
                 ))
             })
             .collect::<Result<Vec<_>, DedicatedError>>()?;

@@ -227,6 +227,14 @@ impl BearerCoordinator {
                         domain: request.domain().into(),
                     };
                     let (voices, packets) = traffic.services_mut();
+                    if controller.radio().parked(request.key()).is_some()
+                        && packets.has_connection(connection)
+                        && let Err(error) = packets.release_connection(connection)
+                    {
+                        tracing::warn!(
+                            "Tunnel of a parked UE not released: connection={connection:?} error={error:?}"
+                        );
+                    }
                     if voices.has_connection(connection) || packets.has_connection(connection) {
                         State::Ready(request)
                     } else if !controller.core().gateway().owns_iu_release(request) {

@@ -17,6 +17,21 @@ use umts_types::{RadioEpoch, time::ChipInstant};
 
 const UPLINK_SCRAMBLING_CODE_COUNT: u32 = 1 << 24;
 const CN_DOMAINS: usize = 2;
+const SECONDS_PER_MINUTE: u64 = 60;
+const MILLISECONDS_PER_SECOND: u64 = 1000;
+
+fn update_period_chips() -> u64 {
+    umts_rrc::ue_timers::UeTimerProfile::release_reference()
+        .connected
+        .and_then(|timers| {
+            timers.t305_minutes.map(|minutes| {
+                u64::from(minutes) * SECONDS_PER_MINUTE
+                    + u64::from(timers.t302_ms) * (u64::from(timers.n302) + 1)
+                        / MILLISECONDS_PER_SECOND
+            })
+        })
+        .map_or(0, |seconds| seconds * umts_types::time::CHIPS_PER_SECOND)
+}
 
 #[cfg(test)]
 mod dispatch_tests;
@@ -139,6 +154,7 @@ pub(super) struct BearerStep {
 pub(super) struct BearerCoordinator {
     pub(super) assignments: RabHandoff,
     pub(super) inactivity: super::inactivity::Inactivity,
+    pub(super) dormancy: super::dormancy::Dormancy,
     pub(super) network_failures: u64,
     network_error: Option<crate::packet_rabs::Error>,
     policy: ConfiguredPolicy,
@@ -242,6 +258,29 @@ impl BearerCoordinator {
             )
             .map_err(|error| anyhow!("prepare RAB handoff: {error:?}"))?,
             inactivity: super::inactivity::Inactivity::new(config)?,
+            dormancy: super::dormancy::Dormancy::new(
+                config
+                    .rrc
+                    .dormancy
+                    .enabled()
+                    .then(|| super::dormancy::Settings {
+                        update_period_chips: update_period_chips(),
+                        after_chips: u64::from(config.rrc.dormancy.after_seconds)
+                            * umts_types::time::CHIPS_PER_SECOND,
+                        state: match config.rrc.dormancy.state {
+                            umts_config::DormancyState::CellPch => {
+                                umts_rrc::mobility::ParkedState::CellPch
+                            }
+                            umts_config::DormancyState::UraPch => {
+                                umts_rrc::mobility::ParkedState::UraPch {
+                                    identity: config.rrc.ura_identity,
+                                }
+                            }
+                        },
+                        drx_coefficient: config.rrc.dormancy.drx_cycle_length_coefficient,
+                    }),
+                usize::try_from(config.runtime.maximum_ues).unwrap_or(usize::MAX),
+            ),
             network_failures: 0,
             network_error: None,
             policy: ConfiguredPolicy::new(config)?,
@@ -272,6 +311,12 @@ impl BearerCoordinator {
         feedback_lead_chips: u64,
     ) -> Result<ReceiveIdentity, Box<RejectedRabAssignment>> {
         let owners = &self.owners;
+        if self.hsdpa.is_none() {
+            // Without HSDPA nothing is prepared ahead, so a returning UE is answered at once.
+            let _ = controller
+                .radio_mut()
+                .send_deferred_confirm(pending.request().key());
+        }
         let prepared = controller.prepare_rab_dch(pending, &self.policy, &mut self.resources)?;
         let prepared = match &self.hsdpa {
             Some(shared) => {
@@ -282,7 +327,7 @@ impl BearerCoordinator {
                     crate::controller::InitialCatalogAdmission::Ready(prepared) => prepared,
                 }
             }
-            None => prepared,
+            _ => prepared,
         };
         controller.begin_prepared_rab_dch(prepared, &self.policy, &mut self.resources, |prepared| {
             owners.settings(prepared, time.radio, threshold, feedback_lead_chips)
@@ -420,13 +465,20 @@ impl BearerCoordinator {
                 );
             }
         }
-        let cleanup = self.cleanup.step(
+        self.dormancy
+            .service(controller, traffic, &mut self.assignments, time.radio);
+        let mut cleanup = self.cleanup.step(
             controller,
             &mut self.resources,
             traffic,
             time.radio,
             time.security.control,
         );
+        if let Some((key, pending)) = cleanup.parked.take()
+            && controller.radio().resumable(key)
+        {
+            self.dormancy.store(key, pending);
+        }
         if let Some(request) = cleanup.release_transferred {
             self.releases.failed(request)
         }

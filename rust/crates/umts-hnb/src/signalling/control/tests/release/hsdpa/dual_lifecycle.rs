@@ -1017,7 +1017,11 @@ fn dual_lifecycle_with_partial_release(
         .unwrap_or_else(|_| panic!("both banks drained"));
     assert!(cell.available_bytes() < 32_000_000);
     drop(retired);
-    assert_eq!(cell.available_bytes(), 32_000_000);
+    // Shared HSDPA plan tables stay with the cell.
+    assert_eq!(
+        cell.available_bytes() + cell.tables().retained_bytes(),
+        32_000_000
+    );
 }
 
 pub(super) fn with_second_packet_bearer(

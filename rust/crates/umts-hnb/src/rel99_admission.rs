@@ -117,6 +117,7 @@ pub enum AdmissionError {
     PreparationDeadline(Box<PreparationDeadline>),
     Capacity,
     Closed,
+    Parked,
     Protocol,
     Cancelled,
     Receive(DedicatedControlError),
@@ -728,6 +729,40 @@ impl Rel99Admission {
         fail(entry, AdmissionError::Cancelled);
         Ok(())
     }
+    /// `Some(true)` with packet RABs of the original assignment to set up again, `Some(false)`
+    /// with no RAB, `None` when the session cannot be stopped for a paging state.
+    pub fn parkable(&self, identity: ReceiveIdentity) -> Option<bool> {
+        let entry = self.entry(identity)?;
+        if entry.lifecycle.phase() != AdmissionPhase::Active
+            || !entry.lifecycle.is_idle()
+            || entry.failure.is_some()
+        {
+            return None;
+        }
+        let inventory = entry.inventory.as_ref()?;
+        if inventory.active().is_empty() {
+            return Some(false);
+        }
+        if !entry.additional_assignments.is_empty() || entry.circuit_assignment.is_some() {
+            return None;
+        }
+        let pending = entry.rab_assignment.as_ref()?.pending();
+        (pending.request().domain() == umts_iuh::Domain::Ps
+            && pending.setup_selection().is_some()
+            && inventory
+                .active()
+                .iter()
+                .all(|active| active.request() == pending.request()))
+        .then_some(true)
+    }
+    pub fn park(&mut self, identity: ReceiveIdentity) -> Result<(), AdmissionError> {
+        if self.parkable(identity).is_none() {
+            return Err(AdmissionError::Phase);
+        }
+        let entry = self.entry_mut(identity).ok_or(AdmissionError::Identity)?;
+        fail(entry, AdmissionError::Parked);
+        Ok(())
+    }
     pub fn take_retired(
         &mut self,
         identity: ReceiveIdentity,
@@ -791,10 +826,29 @@ impl Rel99Admission {
         ) {
             return self.release_response(received, security);
         }
+        let resume = self
+            .entries
+            .get(received.key().slot as usize)
+            .and_then(Option::as_ref)
+            .is_some_and(|entry| {
+                entry.identity.ue == received.key()
+                    && entry.setup_authority
+                    && entry.procedure.mode() == umts_rrc::dedicated::SetupMode::Resume
+                    && entry.procedure.phase() != umts_rrc::dedicated::SetupPhase::Complete
+            });
+        // The answer to a resume is a reconfiguration response. Later set-up responses on the
+        // same session belong to bearer additions.
         if !matches!(
-            received.message().value.message,
-            ULDCCHMessageType::radioBearerSetupComplete(_)
-                | ULDCCHMessageType::radioBearerSetupFailure(_)
+            (&received.message().value.message, resume),
+            (
+                ULDCCHMessageType::radioBearerSetupComplete(_)
+                    | ULDCCHMessageType::radioBearerSetupFailure(_),
+                _
+            ) | (
+                ULDCCHMessageType::radioBearerReconfigurationComplete(_)
+                    | ULDCCHMessageType::radioBearerReconfigurationFailure(_),
+                true
+            )
         ) {
             return None;
         }

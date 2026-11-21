@@ -60,6 +60,7 @@ pub struct SchedulingAdmission {
 }
 
 pub(crate) struct SchedulingPreparation {
+    tables: crate::hsdpa_packet::SharedPlanTables,
     construction: Arc<umts_rrc::hsdpa::InitialConfiguration>,
     rates: Rates,
     settings: SchedulingSettings,
@@ -83,6 +84,7 @@ impl SchedulingPreparation {
             .reserve(budget.maximum_total_bytes)
             .ok_or(Error::Capacity)?;
         Ok(Self {
+            tables: cell.tables().clone(),
             construction,
             rates,
             settings,
@@ -243,15 +245,26 @@ impl SchedulingPreparation {
             .and_then(|value| value.checked_sub(resource_overhead))
             .and_then(NonZeroUsize::new)
             .ok_or(Error::Capacity)?;
-        let plans = PlanBank::new(
+        let started = std::time::Instant::now();
+        let shared_before = self.tables.retained_bytes();
+        let plans = PlanBank::with_shared(
             &formats,
             parameters.harq.category(),
             parameters.h_rnti,
             budget.maximum_formats,
             budget.maximum_coded_bits,
             budget.maximum_plan_bytes.min(remaining),
+            &self.tables,
         )
         .map_err(Error::Rate)?;
+        tracing::info!(
+            category = parameters.harq.category().value(),
+            built_bytes = self.tables.retained_bytes() - shared_before,
+            shared_bytes = self.tables.retained_bytes(),
+            shared_tables = self.tables.tables(),
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "HSDPA transmission plans attached to the shared tables"
+        );
         let processes = u8::try_from(parameters.harq.process_memory().len())
             .ok()
             .and_then(std::num::NonZeroU8::new)

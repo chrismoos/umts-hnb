@@ -18,7 +18,7 @@ impl InitialConfiguration {
             .iter()
             .find(|queue| queue.flow() == mapping.flow)
             .ok_or(DedicatedError::Mapping)?;
-        let mut result = bearer.mapping.wire_r7();
+        let mut result = bearer.mapping_info_r7();
         result.0[0].dl_logical_channel_mapping_list =
             Some(ie::DLLogicalChannelMappingListR7(vec![
                 ie::DLLogicalChannelMappingR7::new(

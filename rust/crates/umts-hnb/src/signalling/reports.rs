@@ -176,13 +176,20 @@ pub(super) fn request_cpich(
     Ok(())
 }
 
-fn can_publish(
+pub(super) fn can_publish(
     context: &super::Context,
     key: umts_types::UeKey,
     bearer: SignallingBearer,
 ) -> Result<bool, SignallingError> {
-    if context.dedicated_route.is_none()
-        || context.setup.phase() != umts_rrc::establishment::EstablishmentPhase::Established
+    Ok(context.dedicated_route.is_some() && ready_to_publish(context, key, bearer)?)
+}
+
+pub(super) fn ready_to_publish(
+    context: &super::Context,
+    key: umts_types::UeKey,
+    bearer: SignallingBearer,
+) -> Result<bool, SignallingError> {
+    if context.setup.phase() != umts_rrc::establishment::EstablishmentPhase::Established
         || context.bearer_change.is_some()
         || context.idle_release.is_some()
         || context.control.pending_new_data()
@@ -205,7 +212,7 @@ fn can_publish(
     Ok(true)
 }
 
-fn publish(
+pub(super) fn publish(
     context: &mut super::Context,
     key: umts_types::UeKey,
     bearer: SignallingBearer,

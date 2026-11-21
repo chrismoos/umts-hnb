@@ -58,10 +58,12 @@ pub(in crate::hsupa) fn reconfiguration_message(
                         .iter()
                         .find(|mapping| mapping.bearer == rb.rb_identity.0)
                         .ok_or(DedicatedError::Mapping)?;
-                    let options = rb
+                    // The first option is the E-DCH one. The FACH/RACH option is rebuilt below.
+                    let mut options = rb
                         .rb_mapping_info
                         .0
                         .into_iter()
+                        .take(1)
                         .map(|option| {
                             let downlink = match mapping.downlink {
                                 RetainedDownlink::Ehs { queue, logical } => {
@@ -101,6 +103,12 @@ pub(in crate::hsupa) fn reconfiguration_message(
                             ))
                         })
                         .collect::<Result<Vec<_>, DedicatedError>>()?;
+                    options.push(
+                        crate::dedicated::common_mapping::CommonChannel::for_bearer(
+                            rb.rb_identity.0,
+                        )
+                        .option_r7(),
+                    );
                     Ok(ie::RBInformationAffectedR7::new(
                         rb.rb_identity,
                         ie::RBMappingInfoR7(options),

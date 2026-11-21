@@ -145,3 +145,33 @@ fn dual_carrier_snapshot_keeps_primary_zero_cqi_and_secondary_absence_distinct()
     assert_eq!(json["hsdpaCarriers"][1]["maximumNewTransportBits"], "42192");
     assert_eq!(from_value::<Ue>(json).unwrap(), ue);
 }
+
+#[test]
+fn parked_rrc_states_keep_their_numbers_and_names() {
+    use umts_management::proto::RrcState;
+    for (state, number, name) in [
+        (RrcState::CellPch, 6, "RRC_STATE_CELL_PCH"),
+        (RrcState::UraPch, 7, "RRC_STATE_URA_PCH"),
+    ] {
+        assert_eq!(i32::from(state), number);
+        assert_eq!(state.as_str_name(), name);
+        assert_eq!(RrcState::try_from(number), Ok(state));
+        let ue = Ue {
+            rrc_state: state.into(),
+            ..Default::default()
+        };
+        let json = to_value(&ue).unwrap();
+        assert_eq!(json["rrcState"], name);
+        assert_eq!(from_value::<Ue>(json).unwrap(), ue);
+    }
+    for (state, number) in [
+        (RrcState::Unspecified, 0),
+        (RrcState::Connecting, 1),
+        (RrcState::CellFach, 2),
+        (RrcState::CellDch, 3),
+        (RrcState::Releasing, 4),
+        (RrcState::Failed, 5),
+    ] {
+        assert_eq!(i32::from(state), number);
+    }
+}

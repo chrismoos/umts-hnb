@@ -394,7 +394,7 @@ where
             ingress_entries: maximum_ues,
             core_entries: maximum_ues,
             response_guard_chips: ticks(CHIPS_PER_SECOND * 5),
-            drx_coefficient: plan.config.rrc.cn_drx_cycle_length_coefficient,
+            drx_coefficient: plan.config.rrc.utran_drx_cycle_length_coefficient(),
             per_ue_cpu_ns_per_frame: CPU_RESERVATION_NS_PER_FRAME,
             tmsi_registration: plan
                 .config

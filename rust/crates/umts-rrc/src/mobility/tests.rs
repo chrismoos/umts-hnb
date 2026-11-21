@@ -96,6 +96,7 @@ fn cell_update_matches_spec_bit_fields_and_validates_full_urnti_and_domain_start
     assert_eq!(update.cause, UpdateCause::RlcUnrecoverable);
     assert!(update.signalling_rlc_error);
     assert!(!update.user_rlc_error);
+    assert!(update.failure.is_none());
     assert_eq!(rasn::uper::encode(&request()).unwrap(), wire);
     assert_eq!(
         inspect_cell_update(AssignedRntis::new(0x124, 0x45678, 1).unwrap(), &decoded),
@@ -212,4 +213,47 @@ fn cell_update_confirm_dcch_carries_the_new_crnti_that_requires_a_mobility_confi
     assert_eq!(ies.rrc_transaction_identifier.0, 2);
     assert_eq!(ies.rrc_state_indicator, ie::RRCStateIndicator::cell_FACH);
     assert_eq!(ies.new_c_rnti.map(|value| word(&value.0)), Some(0xbeef));
+}
+
+#[test]
+fn cell_update_reports_the_failed_confirm_transaction_and_cause() {
+    for (wire, cause) in [
+        (
+            ie::FailureCauseWithProtErr::physicalChannelFailure(()),
+            UpdateFailureCause::PhysicalChannelFailure,
+        ),
+        (
+            ie::FailureCauseWithProtErr::invalidConfiguration(()),
+            UpdateFailureCause::InvalidConfiguration,
+        ),
+        (
+            ie::FailureCauseWithProtErr::configurationUnsupported(()),
+            UpdateFailureCause::ConfigurationUnsupported,
+        ),
+        (
+            ie::FailureCauseWithProtErr::unsupportedMeasurement(()),
+            UpdateFailureCause::Other,
+        ),
+    ] {
+        let mut message = request();
+        let ULCCCHMessageType::cellUpdate(update) = &mut message.message else {
+            unreachable!()
+        };
+        update.cell_update_cause = ie::CellUpdateCause::radiolinkFailure;
+        update.failure_cause = Some(ie::FailureCauseWithProtErrTrId::new(
+            ie::RRCTransactionIdentifier(2),
+            wire,
+        ));
+        let wire = rasn::uper::encode(&message).unwrap();
+        let decoded = decode_uplink_common(&wire, wire.len() * 8).unwrap();
+        let update = inspect_cell_update(assigned(), &decoded).unwrap();
+        assert_eq!(update.cause, UpdateCause::RadioLinkFailure);
+        assert_eq!(
+            update.failure,
+            Some(UpdateFailure {
+                transaction: 2,
+                cause
+            })
+        );
+    }
 }

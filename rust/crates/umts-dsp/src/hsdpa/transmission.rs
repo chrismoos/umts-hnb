@@ -9,7 +9,7 @@ use crate::{
     crc::TransportCrc,
     turbo::{TurboBlockFormat, TurboBlockPlan},
 };
-use std::num::NonZeroUsize;
+use std::{num::NonZeroUsize, sync::Arc};
 use umts_types::hsdpa::Category;
 
 const INVERT_BIT: u32 = 1;
@@ -24,17 +24,50 @@ pub struct TransmissionPlan {
     assignment: ScchAssignment,
     control: [Bit; SCCH_BITS],
     coded_bits: usize,
-    sources: Box<[[u8; SOURCE_ENTRY_BYTES]]>,
+    sources: Arc<[[u8; SOURCE_ENTRY_BYTES]]>,
 }
 
 impl TransmissionPlan {
     /// Requested retained storage, excluding allocator overhead and construction scratch.
     pub fn required_storage_bytes(assignment: ScchAssignment) -> Result<usize, DspError> {
+        Self::shared_storage_bytes(assignment)?
+            .checked_add(std::mem::size_of::<Self>())
+            .ok_or(DspError::Capacity)
+    }
+
+    pub fn shared_storage_bytes(assignment: ScchAssignment) -> Result<usize, DspError> {
         usize::from(assignment.code_count())
             .checked_mul(assignment.modulation().bits_per_code())
             .and_then(|bits| bits.checked_mul(SOURCE_ENTRY_BYTES))
-            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
             .ok_or(DspError::Capacity)
+    }
+
+    pub fn for_assignment(
+        &self,
+        assignment: ScchAssignment,
+        control_encoder: &ScchEncoder,
+    ) -> Result<Self, DspError> {
+        if assignment.code_count() != self.assignment.code_count()
+            || assignment.modulation() != self.assignment.modulation()
+            || assignment.transport_size_index() != self.assignment.transport_size_index()
+            || assignment.version() != self.assignment.version()
+            || assignment.table() != self.assignment.table()
+        {
+            return Err(DspError::InvalidCode);
+        }
+        Ok(Self {
+            payload_bits: self.payload_bits,
+            soft_bits: self.soft_bits,
+            encoder: control_encoder.clone(),
+            assignment,
+            control: control_encoder.encode(assignment)?,
+            coded_bits: self.coded_bits,
+            sources: Arc::clone(&self.sources),
+        })
+    }
+
+    pub fn shares_sources(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.sources, &other.sources)
     }
 
     pub fn new(
@@ -247,6 +280,10 @@ impl TransmissionPlan {
         &self.control
     }
 
+    pub fn coded_bits(&self) -> usize {
+        self.coded_bits
+    }
+
     pub fn physical_bits(&self) -> usize {
         self.sources.len()
     }
@@ -277,7 +314,7 @@ impl TransmissionPlan {
         if coded.len() != self.coded_bits || output.len() != self.physical_bits() {
             return Err(DspError::InvalidLength);
         }
-        for (bit, &[first, second, third]) in output.iter_mut().zip(&self.sources) {
+        for (bit, &[first, second, third]) in output.iter_mut().zip(self.sources.iter()) {
             let source = u32::from_le_bytes([first, second, third, 0]);
             *bit = Bit::from(
                 (coded[(source >> SOURCE_INDEX_SHIFT) as usize] == Bit::One)

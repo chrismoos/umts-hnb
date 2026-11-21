@@ -122,15 +122,27 @@ impl Session {
         publish: impl FnOnce(Frame) -> Result<T, E>,
     ) -> Result<Option<T>, PublishError<E>> {
         self.ready(now).map_err(PublishError::Session)?;
+        for ue in self.ues.values_mut() {
+            for requests in &mut ue.rab_requests {
+                requests.retain(|pending| {
+                    !pending.local || pending.items.iter().any(|item| item.outcome.is_none())
+                });
+            }
+        }
         // TS 25.413 8.2.2 requires every requested RAB in the first response.
         let Some(pending) = self
             .ues
             .values()
             .flat_map(|ue| ue.rab_requests.iter().flatten())
             .filter(|pending| {
-                !pending.items.is_empty() && pending.items.iter().all(|item| item.outcome.is_some())
+                !pending.local
+                    && !pending.items.is_empty()
+                    && pending.items.iter().all(|item| item.outcome.is_some())
             })
-            .filter(|pending| self.check_rab_connection(pending.request).is_ok())
+            .filter(|pending| {
+                self.check_rab_connection(pending.request).is_ok()
+                    && !self.rab_superseded(pending.request)
+            })
             .min_by_key(|pending| pending.request.serial())
         else {
             return Ok(None);

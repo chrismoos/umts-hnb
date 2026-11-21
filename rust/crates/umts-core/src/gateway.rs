@@ -500,6 +500,24 @@ impl<T: Transport> Gateway<T> {
     pub fn same_rab_owner(&self, request: umts_iuh::session::RabRequest) -> bool {
         self.session.same_rab_owner(request)
     }
+    pub fn rab_superseded(&self, request: umts_iuh::session::RabRequest) -> bool {
+        self.session.rab_superseded(request)
+    }
+    pub fn reinstate_rab(
+        &mut self,
+        request: umts_iuh::session::RabRequest,
+        assignment: &umts_iuh::ranap::rab::Assignment,
+    ) -> Result<(), Error> {
+        if self.phase != Phase::Serving {
+            return Err(Error::State);
+        }
+        self.session
+            .reinstate_rab(request, assignment)
+            .map_err(Error::Session)
+    }
+    pub fn mark_rab_in_flight(&mut self, request: umts_iuh::session::RabRequest) -> bool {
+        self.session.mark_rab_in_flight(request)
+    }
     pub fn has_pending_rab_request(&self, request: umts_iuh::session::RabRequest) -> bool {
         self.session.has_pending_rab_request(request)
     }

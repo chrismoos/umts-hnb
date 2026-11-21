@@ -624,6 +624,7 @@ impl Protection {
         let dedicated_route = context.dedicated_route;
         let idle_release = &mut context.idle_release;
         let reports = &mut context.reports;
+        let dormancy = &mut context.dormancy;
         let mut completed = None;
         let mut confirmed = false;
         context
@@ -635,11 +636,29 @@ impl Protection {
                 entry.bytes,
                 &mut context.protection.scratch,
                 |admission, accepted| {
-                    if super::signalling_release::admit(entry.bearer, message, Some(router), core)?
+                    if super::signalling_release::admit(
+                        entry.bearer,
+                        message,
+                        Some(router),
+                        core,
+                        &mut dormancy.session_end,
+                    )?
                     {
                         return Ok(());
                     }
                     super::log_dedicated(key, &message.value.message);
+                    if dormancy.admit(
+                        &message.value.message,
+                        entry.coverage,
+                        received_time.serviced(),
+                    ) {
+                        if let Some(coverage) = entry.coverage {
+                            control
+                                .request_status_confirmation(key, coverage)
+                                .map_err(SignallingError::Am)?;
+                        }
+                        return Ok(());
+                    }
                     if reports.admit(entry.bearer, &message.value.message)? {
                         if matches!(&message.value.message, umts_rrc_schema::class_definitions::ULDCCHMessageType::measurementReport(_)) {
                             reports.log_measurement(key, entry.time, bearer_change.is_some());

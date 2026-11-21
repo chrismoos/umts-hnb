@@ -147,6 +147,37 @@ automatically selects 15.36 MS/s TX for two 5 MHz channels, with centers
 5 MHz apart and a combined 10 MHz span. RX remains at 7.68 MS/s. TX analog
 bandwidth adjusts automatically unless explicitly set.
 
+An inactive handset with a packet session can be parked: it keeps its
+connection and its packet session, stops transmitting, and listens for paging
+only. A handset is parked after 20 seconds without packets by default. These settings control it:
+
+| Setting | Meaning |
+| --- | --- |
+| `rrc.dormancy.after_seconds` | Seconds without packets before a handset is parked, `20` by default. `0` disables parking. A value not shorter than `rrc.inactivity_release_seconds` has no effect, because the handset is released first. |
+| `rrc.dormancy.state` | `cell_pch` or `ura_pch`. With `ura_pch` the cell broadcasts `rrc.ura_identity` in SIB2. |
+| `rrc.dormancy.drx_cycle_length_coefficient` | Paging cycle of a parked handset: `3` = 80 ms, `4` = 160 ms, `5` = 320 ms, `6` = 640 ms, `7` = 1.28 s, `8` = 2.56 s, `9` = 5.12 s. A longer cycle saves handset battery and delays downlink data and incoming calls. A handset attached for calls uses at most the `rrc.cn_drx_cycle_length_coefficient` cycle (the idle-mode paging cycle the core network uses for calls, same values). |
+| `rrc.dormancy.fast_dormancy_inhibit_seconds` | Minimum time between two requests from a handset to end its data session (T323): `0`, `5`, `10`, `20`, `30`, `60`, `90` or `120`. `null` selects `5`. Broadcast only while parking is enabled. |
+
+
+A parked handset has no dedicated channel and transmits nothing. It keeps its RRC connection, its
+security context, its packet bearers and its core connections, and listens for paging on its DRX cycle.
+
+- A handset is parked when it has had no packets and no NAS messages for `after_seconds`, has no
+  voice call and no circuit-switched connection, and holds either packet bearers only or no bearer.
+- It returns to a dedicated channel when it has uplink data, when downlink packets arrive for it, or
+  when the core pages it. HSDPA and HSUPA are activated again after the return. No message is sent
+  to the core.
+- Returning takes about 4 seconds with HSDPA, most of it preparing the HSDPA scheduling resources.
+  The uplink packet that triggers the return can be lost and is then retransmitted by its sender.
+- `rrc.inactivity_release_seconds` still releases the connection of a handset that stays parked
+  without traffic. The handset is told by paging and returns to idle mode.
+- A parked handset that sends no periodical update for 30 minutes, or answers none of eight pages,
+  is released as lost.
+- User data is not carried on FACH and RACH.
+
+`rrc.inactivity_release_seconds` still releases a handset that stays inactive,
+parked or not.
+
 If a phone attaches but has no data, check
 [packet routing](docs/core-setup.md#5-set-up-packet-routing).
 

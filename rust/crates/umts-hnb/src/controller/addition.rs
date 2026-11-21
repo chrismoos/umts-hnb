@@ -196,6 +196,17 @@ impl<T: Transport> CommonController<T> {
         report.visited =
             admission.visit_additional_assignments(settings.visits, |admission, previous| {
                 let mut identity = previous;
+                if matches!(
+                    admission.addition_phase(identity),
+                    Some(
+                        AdditionPhase::Switching
+                            | AdditionPhase::AwaitingComplete
+                            | AdditionPhase::ReadyToCommit
+                    )
+                ) && let Some(assignment) = admission.additional_assignment(identity)
+                {
+                    core.gateway_mut().mark_rab_in_flight(assignment.request());
+                }
                 let result = (|| {
                     match admission.addition_phase(identity) {
                         Some(AdditionPhase::ReadyToCommit) => {

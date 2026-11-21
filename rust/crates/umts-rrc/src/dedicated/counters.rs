@@ -24,6 +24,15 @@ impl SetupCounters {
             complete.count_c_activation_time.as_ref(),
         )
     }
+    pub(super) fn from_resume_complete(
+        complete: &pdu::RadioBearerReconfigurationComplete,
+    ) -> Result<Self, DedicatedError> {
+        Self::parse(
+            None,
+            complete.ul_counter_synchronisation_info.as_ref(),
+            complete.count_c_activation_time.as_ref(),
+        )
+    }
     fn parse(
         new_bearer_start: Option<Start>,
         sync: Option<&ie::ULCounterSynchronisationInfo>,
@@ -47,6 +56,19 @@ impl SetupCounters {
     }
     pub fn new_bearer_start(self) -> Option<Start> {
         self.new_bearer_start
+    }
+    /// The START that anchors the packet bearers of a UE returning from a paging state. Its
+    /// response has no START for a new RAB. TS 25.331 8.5.21 takes the packet START of the
+    /// response, and 8.3.1.6 that of the CELL UPDATE when the response has none.
+    pub fn resumed_with(mut self, cell_update: DomainStarts) -> Self {
+        if self.new_bearer_start.is_none() {
+            self.new_bearer_start = self
+                .domain_starts
+                .ps
+                .or(cell_update.ps)
+                .and_then(|value| Start::new(value).ok());
+        }
+        self
     }
     pub fn domain_starts(self) -> DomainStarts {
         self.domain_starts

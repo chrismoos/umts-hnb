@@ -19,7 +19,7 @@ mod owner;
 pub use encoders::EncoderBank;
 mod plans;
 pub use owner::{OwnerError, PacketOwner, PacketQueues, RetiredPackets};
-pub use plans::{PlanBank, PlanFormat};
+pub use plans::{PlanBank, PlanFormat, SharedPlanTables};
 mod preparation;
 pub use preparation::{PrepareError, RejectedPreparation, TransmitRequest};
 pub(crate) mod control;

@@ -81,6 +81,10 @@ pub(super) struct PendingAssignment {
     request: RabRequest,
     items: Vec<Item>,
     reservation: Reservation,
+    /// The UE has been sent the reconfiguration, which it completes whatever the core does next.
+    pub(super) in_flight: bool,
+    /// The radio side is re-establishing bearers the core already holds. The core gets no response.
+    pub(super) local: bool,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Reservation {
@@ -126,6 +130,8 @@ impl PendingAssignment {
             request,
             items,
             reservation,
+            in_flight: false,
+            local: false,
         })
     }
     fn cancels(&self, previous: &Item) -> bool {

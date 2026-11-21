@@ -40,12 +40,12 @@ impl GroupedTpc {
                     && estimate.observed_at().index <= start.index
                     && estimate.valid_until().index > start.index
             };
-            // A handset far above target, as at the start of its dedicated channel, is
-            // corrected in every group so its burst over the other handsets ends sooner.
+            // A handset far from target, as at the start of its dedicated channel, is
+            // corrected in every group so it reaches target before it disturbs the others.
             let control_group = group % cadence == u64::from(self.hold_groups)
                 || estimate
                     .as_ref()
-                    .is_some_and(|estimate| fresh(estimate) && estimate.far_above_target());
+                    .is_some_and(|estimate| fresh(estimate) && estimate.far_from_target());
             self.command = None;
             let groups = &mut counters.groups;
             if position != 0 {

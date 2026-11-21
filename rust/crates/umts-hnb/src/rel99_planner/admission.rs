@@ -215,16 +215,28 @@ impl PreparedInitial {
             self.setup.rabs().to_vec(),
         )
         .map_err(OwnerBuildError::Procedure)?;
-        let procedure = RadioBearerSetupProcedure::initial(
-            key,
-            radio
-                .next_bearer_setup_transaction(key)
-                .map_err(OwnerBuildError::Signalling)?,
-            setup,
-            settings.now,
-            settings.publication_deadline,
-            settings.response_timeout,
-        )
+        let transaction = radio
+            .next_bearer_setup_transaction(key)
+            .map_err(OwnerBuildError::Signalling)?;
+        let procedure = if radio.resuming(key) {
+            RadioBearerSetupProcedure::resume(
+                key,
+                transaction,
+                setup,
+                settings.now,
+                settings.publication_deadline,
+                settings.response_timeout,
+            )
+        } else {
+            RadioBearerSetupProcedure::initial(
+                key,
+                transaction,
+                setup,
+                settings.now,
+                settings.publication_deadline,
+                settings.response_timeout,
+            )
+        }
         .map_err(OwnerBuildError::Procedure)?;
         let mut endpoints = radio
             .signalling_endpoints(key)

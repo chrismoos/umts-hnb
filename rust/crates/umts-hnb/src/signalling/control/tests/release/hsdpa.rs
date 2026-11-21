@@ -68,22 +68,15 @@ fn fifteen_code_seven_process_catalog_fits_trial_budget() {
         .build()
         .unwrap_or_else(|error| panic!("{error:?}"));
     assert!(prepared.retained_bytes() <= configured.maximum_ue_bytes as usize);
-    let minimum_plan_bytes: usize = prepared
-        .plan_formats()
-        .map(|format| {
-            let assignment = umts_dsp::hsdpa::ScchAssignment::new(
-                format.first_code,
-                format.codes,
-                format.modulation,
-                format.size_index,
-                0,
-                format.version,
-                false,
-            )
-            .unwrap();
-            umts_dsp::hsdpa::TransmissionPlan::required_storage_bytes(assignment).unwrap()
-        })
-        .sum();
+    // The per-UE plan budget covers plan state and control words. The source tables are
+    // shared and charged to the cell.
+    let minimum_plan_bytes = prepared.plan_formats().count()
+        * std::mem::size_of::<(
+            crate::hsdpa_packet::PlanFormat,
+            umts_dsp::hsdpa::TransmissionPlan,
+        )>()
+        + std::mem::size_of::<crate::hsdpa_packet::PlanBank>();
+    assert!(cell.tables().retained_bytes() > minimum_plan_bytes * 10);
     drop(prepared);
     assert!(matches!(
         prepare(minimum_plan_bytes - 1).build(),
@@ -92,7 +85,7 @@ fn fifteen_code_seven_process_catalog_fits_trial_budget() {
         ))
     ));
     assert_eq!(
-        cell.available_bytes(),
+        cell.available_bytes() + cell.tables().retained_bytes(),
         configured.maximum_cell_bytes as usize
     );
 }
@@ -161,7 +154,7 @@ fn fifteen_code_six_process_catalog_fits_trial_budget_with_full_rate() {
     );
     drop(prepared);
     assert_eq!(
-        cell.available_bytes(),
+        cell.available_bytes() + cell.tables().retained_bytes(),
         configured.maximum_cell_bytes as usize
     );
 }
@@ -260,7 +253,11 @@ fn session_admission_preserves_rejected_resources_and_gates_packets() {
         Err(rejected) => rejected,
     };
     assert_eq!(rejected.error, Error::Capacity);
-    assert_eq!(scheduling.cell.available_bytes(), 32_000_000);
+    // Shared HSDPA plan tables stay with the cell.
+    assert_eq!(
+        scheduling.cell.available_bytes() + scheduling.cell.tables().retained_bytes(),
+        32_000_000
+    );
     assert!(Arc::ptr_eq(
         rejected.procedure.construction(),
         &construction
@@ -277,7 +274,11 @@ fn session_admission_preserves_rejected_resources_and_gates_packets() {
     .unwrap_or_else(|error| panic!("{error:?}"));
     assert_eq!(scheduling.cell.available_bytes(), 16_000_000);
     drop(preparation);
-    assert_eq!(scheduling.cell.available_bytes(), 32_000_000);
+    // Shared HSDPA plan tables stay with the cell.
+    assert_eq!(
+        scheduling.cell.available_bytes() + scheduling.cell.tables().retained_bytes(),
+        32_000_000
+    );
     let preparation = crate::hsdpa_session::SchedulingPreparation::new(
         rejected.procedure.construction().configuration().clone(),
         *lease.codes(),
@@ -387,7 +388,11 @@ fn session_admission_preserves_rejected_resources_and_gates_packets() {
         .unwrap_or_else(|_| panic!("settled retirement"));
     assert!(scheduling.cell.available_bytes() < 32_000_000);
     drop(retired);
-    assert_eq!(scheduling.cell.available_bytes(), 32_000_000);
+    // Shared HSDPA plan tables stay with the cell.
+    assert_eq!(
+        scheduling.cell.available_bytes() + scheduling.cell.tables().retained_bytes(),
+        32_000_000
+    );
     runtime.close();
     let (lease, pending) = runtime.take_closed_hsdpa().unwrap().into_retained();
     assert_eq!(pending.count(), 0);

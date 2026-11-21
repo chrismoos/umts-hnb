@@ -11,13 +11,20 @@ use std::{
 #[derive(Clone)]
 pub struct CellSchedulingBudget {
     remaining: Arc<AtomicUsize>,
+    tables: crate::hsdpa_packet::SharedPlanTables,
 }
 
 impl CellSchedulingBudget {
     pub fn new(bytes: NonZeroUsize) -> Self {
+        let remaining = Arc::new(AtomicUsize::new(bytes.get()));
         Self {
-            remaining: Arc::new(AtomicUsize::new(bytes.get())),
+            tables: crate::hsdpa_packet::SharedPlanTables::new(Arc::clone(&remaining)),
+            remaining,
         }
+    }
+
+    pub fn tables(&self) -> &crate::hsdpa_packet::SharedPlanTables {
+        &self.tables
     }
 
     pub fn available_bytes(&self) -> usize {

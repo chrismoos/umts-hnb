@@ -257,6 +257,7 @@ pub enum CleanupFailure {
 #[derive(Default, Debug)]
 pub(super) struct CleanupStep {
     pub release_transferred: Option<RabRequest>,
+    pub parked: Option<(umts_types::UeKey, crate::rab_handoff::PendingRabAssignment)>,
     pub visited: usize,
     pub completed: usize,
     pub failures: usize,
@@ -615,111 +616,114 @@ fn advance<T: Transport, D: BoundDatagrams>(
                     return keep(owner, reporting);
                 }
             }
-            let (voices, packets) = traffic.services_mut();
-            if let Some(state) = owner.packet_assignment.as_mut()
-                && let Err(error) = state.retire(packets)
-            {
-                report.failed(CleanupFailure::Media {
-                    identity,
-                    error: MediaServiceError::Packet(error),
-                });
-                return keep(owner, reporting);
-            }
-            if let Some(state) = owner.circuit_assignment.as_mut()
-                && let Err(error) = state.retire(voices)
-            {
-                report.failed(CleanupFailure::Media {
-                    identity,
-                    error: MediaServiceError::Circuit(error),
-                });
-                return keep(owner, reporting);
-            }
-            if owner.packet_assignment.as_ref().is_some_and(|state| {
-                controller
-                    .core()
-                    .gateway()
-                    .owns_rab_request(state.request())
-            }) && let Err(error) =
-                controller.finish_packet_failure_dch(&mut owner, packets, control, cause())
-            {
-                report.failed(CleanupFailure::Media {
-                    identity,
-                    error: MediaServiceError::Packet(error),
-                });
-                return keep(owner, reporting);
-            }
-            if owner.circuit_assignment.as_ref().is_some_and(|state| {
-                controller
-                    .core()
-                    .gateway()
-                    .owns_rab_request(state.request())
-            }) && let Err(error) =
-                controller.finish_circuit_failure_dch(&mut owner, voices, control, cause())
-            {
-                report.failed(CleanupFailure::Media {
-                    identity,
-                    error: MediaServiceError::Circuit(error),
-                });
-                return keep(owner, reporting);
-            }
-            if let Err(error) = controller.finish_additional_media_failure_dch(
-                &mut owner,
-                packets,
-                voices,
-                control,
-                cause(),
-            ) {
-                report.failed(CleanupFailure::Media {
-                    identity,
-                    error: MediaServiceError::Additional(error),
-                });
-                return keep(owner, reporting);
-            }
-            let settled = outcomes_settled(
-                owner.rab_assignment.as_ref().map(|pending| {
-                    pending.assignment().setup.len() + pending.assignment().release.len()
-                }),
-                owner
-                    .packet_assignment
-                    .as_ref()
-                    .map(|state| state.progress()),
-                owner
-                    .circuit_assignment
-                    .as_ref()
-                    .map(|state| state.progress(voices)),
-            );
-            if reporting.is_none()
-                && !settled
-                && let Some(pending) = owner.rab_assignment.take()
-            {
-                let request = pending.request();
-                match FailedRabAssignment::new(pending, cause(), controller.core().gateway()) {
-                    Ok(failed) => reporting = Some(failed),
-                    Err(failed) => {
-                        owner.rab_assignment = Some(failed.pending);
-                        report.failed(CleanupFailure::Disposition {
-                            request,
-                            error: failed.error,
-                        });
-                        return keep(owner, reporting);
-                    }
-                }
-            }
-            if let Some(failed) = reporting.as_mut() {
-                if let Err(error) =
-                    controller.record_failed_assignment(failed, control, NonZeroUsize::MIN)
+            let parked = matches!(owner.error, AdmissionError::Parked);
+            if !parked {
+                let (voices, packets) = traffic.services_mut();
+                if let Some(state) = owner.packet_assignment.as_mut()
+                    && let Err(error) = state.retire(packets)
                 {
-                    report.failed(CleanupFailure::Core {
-                        request: failed.request(),
-                        error,
+                    report.failed(CleanupFailure::Media {
+                        identity,
+                        error: MediaServiceError::Packet(error),
                     });
-                }
-                if !failed.is_complete() {
                     return keep(owner, reporting);
                 }
-            } else if !settled {
-                report.failed(CleanupFailure::DrainUnavailable(identity));
-                return keep(owner, reporting);
+                if let Some(state) = owner.circuit_assignment.as_mut()
+                    && let Err(error) = state.retire(voices)
+                {
+                    report.failed(CleanupFailure::Media {
+                        identity,
+                        error: MediaServiceError::Circuit(error),
+                    });
+                    return keep(owner, reporting);
+                }
+                if owner.packet_assignment.as_ref().is_some_and(|state| {
+                    controller
+                        .core()
+                        .gateway()
+                        .owns_rab_request(state.request())
+                }) && let Err(error) =
+                    controller.finish_packet_failure_dch(&mut owner, packets, control, cause())
+                {
+                    report.failed(CleanupFailure::Media {
+                        identity,
+                        error: MediaServiceError::Packet(error),
+                    });
+                    return keep(owner, reporting);
+                }
+                if owner.circuit_assignment.as_ref().is_some_and(|state| {
+                    controller
+                        .core()
+                        .gateway()
+                        .owns_rab_request(state.request())
+                }) && let Err(error) =
+                    controller.finish_circuit_failure_dch(&mut owner, voices, control, cause())
+                {
+                    report.failed(CleanupFailure::Media {
+                        identity,
+                        error: MediaServiceError::Circuit(error),
+                    });
+                    return keep(owner, reporting);
+                }
+                if let Err(error) = controller.finish_additional_media_failure_dch(
+                    &mut owner,
+                    packets,
+                    voices,
+                    control,
+                    cause(),
+                ) {
+                    report.failed(CleanupFailure::Media {
+                        identity,
+                        error: MediaServiceError::Additional(error),
+                    });
+                    return keep(owner, reporting);
+                }
+                let settled = outcomes_settled(
+                    owner.rab_assignment.as_ref().map(|pending| {
+                        pending.assignment().setup.len() + pending.assignment().release.len()
+                    }),
+                    owner
+                        .packet_assignment
+                        .as_ref()
+                        .map(|state| state.progress()),
+                    owner
+                        .circuit_assignment
+                        .as_ref()
+                        .map(|state| state.progress(voices)),
+                );
+                if reporting.is_none()
+                    && !settled
+                    && let Some(pending) = owner.rab_assignment.take()
+                {
+                    let request = pending.request();
+                    match FailedRabAssignment::new(pending, cause(), controller.core().gateway()) {
+                        Ok(failed) => reporting = Some(failed),
+                        Err(failed) => {
+                            owner.rab_assignment = Some(failed.pending);
+                            report.failed(CleanupFailure::Disposition {
+                                request,
+                                error: failed.error,
+                            });
+                            return keep(owner, reporting);
+                        }
+                    }
+                }
+                if let Some(failed) = reporting.as_mut() {
+                    if let Err(error) =
+                        controller.record_failed_assignment(failed, control, NonZeroUsize::MIN)
+                    {
+                        report.failed(CleanupFailure::Core {
+                            request: failed.request(),
+                            error,
+                        });
+                    }
+                    if !failed.is_complete() {
+                        return keep(owner, reporting);
+                    }
+                } else if !settled {
+                    report.failed(CleanupFailure::DrainUnavailable(identity));
+                    return keep(owner, reporting);
+                }
             }
             let Some(transmit) = owner.transmit.as_ref() else {
                 report.failed(CleanupFailure::DrainUnavailable(identity));
@@ -764,6 +768,13 @@ fn advance<T: Transport, D: BoundDatagrams>(
                     error: failed.error,
                 });
                 return keep(owner, reporting);
+            }
+            if parked {
+                report.parked = owner
+                    .rab_assignment
+                    .take()
+                    .map(|pending| (identity.ue, pending));
+                return None;
             }
             if owner.procedure.receipt().is_some()
                 && let Err(error) = controller.radio_mut().retire_failed_radio(identity)

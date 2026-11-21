@@ -159,6 +159,25 @@ pub struct Rel99Bearer {
     pub mapping: BearerMapping,
 }
 impl Rel99Bearer {
+    /// TS 25.331 8.6.4.8 forbids transparent mode on RACH and FACH.
+    pub(crate) fn common_channel(&self) -> Option<super::common_mapping::CommonChannel> {
+        (!matches!(self.rlc, Rel99Rlc::Transparent { .. }))
+            .then(|| super::common_mapping::CommonChannel::for_bearer(self.id))
+    }
+    pub(crate) fn mapping_info(&self) -> ie::RBMappingInfo {
+        let mut mapping = self.mapping.wire();
+        mapping
+            .0
+            .extend(self.common_channel().map(|common| common.option()));
+        mapping
+    }
+    pub(crate) fn mapping_info_r7(&self) -> ie::RBMappingInfoR7 {
+        let mut mapping = self.mapping.wire_r7();
+        mapping
+            .0
+            .extend(self.common_channel().map(|common| common.option_r7()));
+        mapping
+    }
     pub fn mappings(&self, direction: DchDirection) -> impl Iterator<Item = LogicalMapping> + '_ {
         self.mapping
             .uplink

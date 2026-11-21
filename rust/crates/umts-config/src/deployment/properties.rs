@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-scalars!(bool, u8, u16, u32, u64, i8, i16, i32, i64, R99ErrorDelivery, R99TrafficClass, HnbgwTransport, RustCircuitInitialization, R99CodingKind, R99TpcAlgorithm, SimdMode, RrcReleaseTransportPolicy);
+scalars!(bool, u8, u16, u32, u64, i8, i16, i32, i64, R99ErrorDelivery, R99TrafficClass, HnbgwTransport, RustCircuitInitialization, R99CodingKind, R99TpcAlgorithm, SimdMode, RrcReleaseTransportPolicy, DormancyState);
 
 scalars!(PacketMode, Rel99Profile, NetworkOperationMode, CpuPlacement);
 
@@ -266,6 +266,10 @@ properties! {
     "rrc.release_complete_retransmissions": u8, false;
     "rrc.inactivity_delete_seconds": u32, false;
     "rrc.combined_bearer_setup": bool, false;
+    "rrc.dormancy.after_seconds": u16, false;
+    "rrc.dormancy.state": DormancyState, false;
+    "rrc.dormancy.drx_cycle_length_coefficient": u8, false;
+    "rrc.dormancy.fast_dormancy_inhibit_seconds": Option<u8>, false;
     "diagnostics.logging.filter": String, false;
     "management.grpc.enabled": bool, false;
     "management.grpc.socket_path": PathBuf, false;

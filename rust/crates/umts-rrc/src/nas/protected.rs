@@ -24,6 +24,17 @@ pub enum NasScheduledError<E> {
 }
 
 impl NasRouter {
+    /// Ends a signalling connection of a UE that cannot be sent SIGNALLING CONNECTION RELEASE
+    /// because it is in CELL_PCH or URA_PCH (TS 25.331 7.2.2.1 gives it no DCCH).
+    pub fn release_unsignalled(&mut self, connection: CoreConnection) -> Result<(), NasError> {
+        if connection.key.ue != self.key
+            || self.links[index(connection.key.domain)] != Some(connection)
+        {
+            return Err(NasError::Context);
+        }
+        self.links[index(connection.key.domain)] = None;
+        Ok(())
+    }
     pub fn release_scheduled_with<T, E>(
         &mut self,
         connection: CoreConnection,

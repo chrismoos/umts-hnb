@@ -780,6 +780,12 @@ fn loss_cleans_queued_registration_even_when_gateway_owner_list_is_empty() {
         radio.registration_failure(key),
         Some(RegistrationFailure::CoreUnavailable)
     );
+    assert!(
+        radio
+            .idle_candidate(key.slot, at(0))
+            .unwrap()
+            .release_after_core_disconnect
+    );
 }
 
 #[test]
@@ -902,6 +908,7 @@ fn iu_release_retains_reopening_nas_until_core_completion() {
     assert_eq!(radio.core().len(), queued);
     send(&mut radio, key, SignallingBearer::NasAm, &mut ue, &INITIAL);
     assert_eq!(radio.process_one(), Some(Err(SignallingError::Capacity)));
+    assert_eq!(radio.process_one(), None);
     assert_eq!(radio.connection(key, CnDomain::Cs), None);
     assert_eq!(
         radio.notify_owned_connection_release(request),

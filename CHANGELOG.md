@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Added `rrc.dormancy` to park inactive packet handsets in CELL_PCH or URA_PCH after 20 s without traffic.
+- Reduced HSDPA activation time and memory use per handset.
+- Fewer dropped connections during calls and when a second handset joins.
+
 ## [0.1.1] - 2026-11-19
 
 - Improve multi-UE reliability so calls, SMS and data work across several UEs, with shared uplink and on-demand code and power allocation.

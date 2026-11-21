@@ -189,9 +189,12 @@ impl Sessions {
                 continue;
             };
             report.visited += 1;
+            // A parked UE cleared its HS-DSCH configuration when it left CELL_DCH (TS 25.331
+            // 8.5.25), so its session ends like that of a closed connection.
             let closed = radio
                 .phase(session.identity().ue)
-                .is_none_or(|phase| phase == umts_rrc::establishment::EstablishmentPhase::Closed);
+                .is_none_or(|phase| phase == umts_rrc::establishment::EstablishmentPhase::Closed)
+                || radio.parked(session.identity().ue).is_some();
             if closed {
                 session.begin_retirement();
             }

@@ -27,6 +27,7 @@ pub enum TimerField {
     T315,
     N315,
     T316,
+    T323,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,6 +59,8 @@ pub struct ConnectedTimers {
     pub t315_seconds: u16,
     pub n315: u16,
     pub t316_seconds: Option<u8>,
+    /// TS 25.331 8.1.14: a UE that stores T323 may request the end of its PS data session.
+    pub t323_seconds: Option<u8>,
 }
 
 impl Default for ConnectedTimers {
@@ -85,6 +88,7 @@ impl Default for ConnectedTimers {
             t315_seconds: 180,
             n315: 1,
             t316_seconds: Some(30),
+            t323_seconds: None,
         }
     }
 }
@@ -154,7 +158,17 @@ impl UeTimerProfile {
             .transpose()?
             .flatten();
         let idle_n312 = extension_count(self.idle.n312, TimerField::N312)?;
-        let extensions = if conn_n312.is_some() || conn_n315.is_some() || idle_n312.is_some() {
+        let t323 = self
+            .connected
+            .as_ref()
+            .and_then(|v| v.t323_seconds)
+            .map(fast_dormancy_inhibit)
+            .transpose()?;
+        let extensions = if conn_n312.is_some()
+            || conn_n315.is_some()
+            || idle_n312.is_some()
+            || t323.is_some()
+        {
             Some(ie::SysInfoType1V3a0NonCriticalExtensions {
                 sys_info_type1_v3a0ext: ie::SysInfoType1V3a0extIEs {
                     ue_conn_timers_and_constants_v3a0ext: ie::UEConnTimersAndConstantsV3a0ext {
@@ -170,7 +184,15 @@ impl UeTimerProfile {
                         n_312: idle_n312,
                     },
                 },
-                v860_non_critical_extentions: None,
+                // TS 25.331 10.2.48.8.4 places T323 in the Release 8 extension of this block.
+                v860_non_critical_extentions: t323.map(|t323| {
+                    ie::SysInfoType1V3a0NonCriticalExtensionsV860NonCriticalExtentions::new(
+                        ie::SysInfoType1V860extIEs::new(ie::UEConnTimersAndConstantsV860ext::new(
+                            Some(t323),
+                        )),
+                        None,
+                    )
+                }),
             })
         } else {
             None
@@ -234,6 +256,10 @@ fn extension_count(value: u16, field: TimerField) -> Result<Option<ie::N312ext>,
                 value: u32::from(value),
             }),
     }
+}
+
+fn fast_dormancy_inhibit(seconds: u8) -> Result<ie::T323, TimerError> {
+    timer_enum!(seconds,T323,T323,{0=>s0,5=>s5,10=>s10,20=>s20,30=>s30,60=>s60,90=>s90,120=>s120})
 }
 
 fn base_n312(value: u16) -> Result<ie::N312, TimerError> {
@@ -506,6 +532,74 @@ mod tests {
                     })
                     .is_err()
             );
+        }
+    }
+
+    #[test]
+    fn fast_dormancy_timer_is_absent_by_default_and_uses_the_release_8_extension() {
+        for profile in [
+            UeTimerProfile::default(),
+            UeTimerProfile::release_reference(),
+        ] {
+            let value = decoded(&profile);
+            assert!(value.v3a0_non_critical_extensions.is_none());
+        }
+        for (seconds, expected) in [
+            (0, ie::T323::s0),
+            (5, ie::T323::s5),
+            (10, ie::T323::s10),
+            (20, ie::T323::s20),
+            (30, ie::T323::s30),
+            (60, ie::T323::s60),
+            (90, ie::T323::s90),
+            (120, ie::T323::s120),
+        ] {
+            let reference = UeTimerProfile::release_reference();
+            let value = decoded(&UeTimerProfile {
+                connected: Some(ConnectedTimers {
+                    t323_seconds: Some(seconds),
+                    ..reference.connected.clone().unwrap()
+                }),
+                idle: reference.idle.clone(),
+            });
+            let base = decoded(&reference);
+            assert_eq!(
+                value.ue_conn_timers_and_constants,
+                base.ue_conn_timers_and_constants
+            );
+            assert_eq!(
+                value.ue_idle_timers_and_constants,
+                base.ue_idle_timers_and_constants
+            );
+            let extension = value.v3a0_non_critical_extensions.unwrap();
+            let earlier = extension.sys_info_type1_v3a0ext;
+            assert!(earlier.ue_conn_timers_and_constants_v3a0ext.n_312.is_none());
+            assert!(earlier.ue_conn_timers_and_constants_v3a0ext.n_315.is_none());
+            assert!(earlier.ue_idle_timers_and_constants_v3a0ext.n_312.is_none());
+            let later = extension.v860_non_critical_extentions.unwrap();
+            assert!(later.non_critical_extensions.is_none());
+            assert_eq!(
+                later
+                    .sys_info_type1_v860ext
+                    .ue_conn_timers_and_constants
+                    .t_323,
+                Some(expected)
+            );
+        }
+        for invalid in [1, 15, 45, 121, u8::MAX] {
+            let Err(SystemInformationError::Timer(error)) =
+                information().encode_with_timers(&UeTimerProfile {
+                    connected: Some(ConnectedTimers {
+                        t323_seconds: Some(invalid),
+                        ..ConnectedTimers::default()
+                    }),
+                    idle: IdleTimers::default(),
+                })
+            else {
+                panic!("accepted T323 of {invalid} s")
+            };
+            assert_eq!(error.field, TimerField::T323);
+            assert_eq!(error.value, u32::from(invalid));
         }
     }
 

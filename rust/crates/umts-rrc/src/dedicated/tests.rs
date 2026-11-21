@@ -21,6 +21,7 @@ use umts_types::{
 };
 
 mod release;
+mod resume;
 
 #[test]
 fn singleton_transport_omits_mac_header_but_shared_transport_preserves_ids() {
@@ -155,7 +156,8 @@ fn assert_directional_tfs(wire: &ie::TransportFormatSet, expected: ie::LogicalCh
 }
 
 fn assert_bearer_mapping_rlc_sizes_are_all(mapping: &ie::RBMappingInfo) {
-    for option in &mapping.0 {
+    // The dedicated option is first. A FACH/RACH option after it uses an explicit size list.
+    for option in mapping.0.iter().take(1) {
         let Some(uplink) = option.ul_logical_channel_mappings.as_ref() else {
             panic!("missing UL mapping")
         };

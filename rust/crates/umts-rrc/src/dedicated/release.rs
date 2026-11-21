@@ -196,7 +196,7 @@ impl ExistingDchRelease {
                     .is_none_or(|previous| previous.mapping != bearer.mapping)
             })
             .map(|bearer| {
-                ie::RBInformationAffected::new(ie::RBIdentity(bearer.id), bearer.mapping.wire())
+                ie::RBInformationAffected::new(ie::RBIdentity(bearer.id), bearer.mapping_info())
             })
             .collect();
         let body = pdu::RadioBearerReleaseR3IEs {

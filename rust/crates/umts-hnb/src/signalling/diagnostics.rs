@@ -14,6 +14,7 @@ pub struct UeOverview {
     pub imsi: Option<Imsi>,
     pub establishment: umts_rrc::establishment::EstablishmentPhase,
     pub dedicated: Option<crate::dedicated_rx::ReceiveIdentity>,
+    pub parked: Option<umts_rrc::mobility::ParkedState>,
     pub cs_connected: bool,
     pub ps_connected: bool,
     pub bearer_change_pending: bool,
@@ -60,6 +61,7 @@ impl CommonSignalling {
                 imsi: context.registration_imsi.or(context.core_imsi),
                 establishment: context.setup.phase(),
                 dedicated: context.dedicated_route,
+                parked: context.dormancy.parked,
                 cs_connected: context
                     .router
                     .as_ref()

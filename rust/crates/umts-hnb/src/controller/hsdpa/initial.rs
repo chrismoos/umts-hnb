@@ -201,6 +201,17 @@ impl<T: Transport> CommonController<T> {
         if !sessions.preparation.ready(initial.identity) {
             return Ok(None);
         }
+        // A UE returning from a paging state gets its deferred confirm now that its HSDPA
+        // resources are prepared, and its dedicated channel once it has answered.
+        let key = initial.identity.ue;
+        if self.radio.wake_confirm_pending(key) {
+            if let Err(error) = self.radio.send_deferred_confirm(key)
+                && !crate::signalling::scheduling::backpressure(&error)
+            {
+                return Err(format!("deferred cell update confirm: {error:?}"));
+            }
+            return Ok(None);
+        }
         let prepared = sessions.preparation.take().expect("ready initial catalog");
         let mut initial = sessions.initial.take().expect("retained initial request");
         let selected_single = sessions.single_cell_fallback[initial.identity.ue.slot as usize]

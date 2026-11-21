@@ -501,3 +501,72 @@ fn cancellation_keeps_unrelated_items_and_reclaims_prior_release_capacity() {
         })
         .unwrap();
 }
+
+#[test]
+fn request_sent_to_the_ue_survives_a_release_without_a_response() {
+    let mut session = live();
+    let sent = request(&mut session, 0, Domain::Cs, &setup(1), 4);
+    let waiting = request(&mut session, 0, Domain::Cs, &setup(2), 4);
+    assert!(session.mark_rab_in_flight(sent));
+    let disconnect = rua::Decoded {
+        notify_ies: vec![],
+        message: rua::Message::Disconnect {
+            context: ContextId::new(42).unwrap(),
+            domain: Domain::Cs,
+            cause: rua::Cause::Radio(rua::RadioCause::NetworkRelease),
+            ranap: None,
+        },
+    };
+    session
+        .receive_rua_with(association(), ControlTime(5), &disconnect, |_| {
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    assert!(!session.mark_rab_in_flight(waiting));
+    assert!(
+        session
+            .authorize_rab(waiting, 2, RabOperation::SetupOrModify)
+            .is_err()
+    );
+    assert!(
+        session
+            .authorize_rab(sent, 1, RabOperation::SetupOrModify)
+            .is_ok()
+    );
+    assert!(session.rab_superseded(sent));
+    session
+        .record_rab_outcome(sent, RabOutcome::Setup(Setup::new(1)))
+        .unwrap();
+    assert_eq!(
+        session.publish_ready_rab_with(ControlTime(6), |_| Ok::<_, ()>(())),
+        Ok(None)
+    );
+}
+
+#[test]
+fn reinstated_request_authorizes_set_up_again_and_is_never_answered() {
+    let mut session = live();
+    let original = request(&mut session, 0, Domain::Ps, &setup(5), 4);
+    session
+        .publish_rab_with(original, &accepted(5), ControlTime(5), |_| Ok::<_, ()>(()))
+        .unwrap();
+    assert!(!session.has_pending_rab_request(original));
+    session.reinstate_rab(original, &setup(5)).unwrap();
+    assert_eq!(
+        session.reinstate_rab(original, &setup(5)),
+        Err(Error::State)
+    );
+    assert!(
+        session
+            .authorize_rab(original, 5, RabOperation::SetupOrModify)
+            .is_ok()
+    );
+    session
+        .record_rab_outcome(original, RabOutcome::Setup(Setup::new(5)))
+        .unwrap();
+    assert_eq!(
+        session.publish_ready_rab_with(ControlTime(6), |_| Ok::<_, ()>(())),
+        Ok(None)
+    );
+    assert!(!session.has_pending_rab_request(original));
+}

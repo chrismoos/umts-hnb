@@ -488,7 +488,9 @@ impl OwnerPlan {
                 },
                 initialization: TpcInitialization {
                     first_radio_link_set: true,
-                    pattern_01_count: 1,
+                    // TS 25.214 5.1.2.2.3 raises power only on five equal commands, so a
+                    // pattern with any "01" pair never raises a handset that starts too low.
+                    pattern_01_count: 0,
                     maximum_slots: self.initial_tpc_maximum_slots,
                 },
             }),

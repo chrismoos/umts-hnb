@@ -4,6 +4,7 @@ mod capability_request;
 mod control;
 mod delivery;
 mod diagnostics;
+mod dormancy;
 mod ingress;
 mod lifecycle;
 mod reports;
@@ -28,6 +29,7 @@ pub use control::{
     HspaCommitError, HspaConfiguration, ReceivedControl,
 };
 pub use diagnostics::{SubscriberHint, UeOverview};
+pub use dormancy::ParkProgress;
 pub use mobility::{CommonIngressStep, CommonIngressWork, CommonMessageKind};
 pub use paging::PagingCounters;
 #[cfg(test)]
@@ -230,6 +232,8 @@ struct Context {
     activity: u64,
     idle_release: Option<lifecycle::IdleRelease>,
     release_after_core_disconnect: bool,
+    nas_waits_release: bool,
+    dormancy: dormancy::Dormancy,
     transactions: transactions::Transactions,
     bearer_change: Option<control::BearerChangeAdmission>,
     frame_pools: [Option<NonZeroU64>; FRAME_POOL_CONFIGURATIONS],
@@ -908,6 +912,7 @@ impl CommonSignalling {
                         um_tx,
                         um_rx,
                     )
+                    .and_then(|um| um.with_utran_identity(source, channel, assigned.urnti()))
                     .map_err(SignallingError::Um)?;
                     let mut control = CommonAmBearer::new(
                         source,
@@ -1001,6 +1006,8 @@ impl CommonSignalling {
                         activity: 0,
                         idle_release: None,
                         release_after_core_disconnect: false,
+                        nas_waits_release: false,
+                        dormancy: dormancy::Dormancy::default(),
                         transactions: transactions::Transactions::default(),
                         bearer_change: None,
                         frame_pools: [None; FRAME_POOL_CONFIGURATIONS],
@@ -1275,11 +1282,25 @@ impl CommonSignalling {
             return background;
         }
         let registry = &self.registry;
+        let core = &self.core;
         let Some(entry) = self
             .ingress
             .front_eligible_with_protection(|key, bearer, protected| {
-                registry.get(key).is_none_or(|context| {
-                    (now.is_some() || context.protection.integrity.configurations() == 0)
+                // NAS that had to wait for a core connection release is passed over until the
+                // release ends. The control messages that complete the release are behind it.
+                let releasing = matches!(
+                    bearer,
+                    SignallingBearer::NasAm | SignallingBearer::LowPriorityNasAm
+                ) && [umts_iuh::Domain::Cs, umts_iuh::Domain::Ps]
+                    .into_iter()
+                    .any(|domain| core.connection_releasing(key, domain));
+                let waits = releasing
+                    && registry
+                        .get(key)
+                        .is_some_and(|context| context.nas_waits_release);
+                !waits
+                    && registry.get(key).is_none_or(|context| {
+                        (now.is_some() || context.protection.integrity.configurations() == 0)
                         && (context.setup.phase() != EstablishmentPhase::AwaitingComplete
                             || bearer == SignallingBearer::ControlAm)
                         // TS 25.331 8.1.4.3 makes RRC release terminal for ongoing procedures.
@@ -1299,7 +1320,7 @@ impl CommonSignalling {
                                     .integrity
                                     .allows_unprotected_uplink(key, bearer.identity())
                                     .unwrap_or(false)))
-                })
+                    })
             })
         else {
             return background;
@@ -1366,6 +1387,7 @@ impl CommonSignalling {
                     message,
                     context.router.as_ref(),
                     &mut self.core,
+                    &mut context.dormancy.session_end,
                 )? {
                     return Ok(key);
                 }
@@ -1381,6 +1403,20 @@ impl CommonSignalling {
                     return Ok(key);
                 }
                 log_dedicated(key, &message.value.message);
+                if context.dormancy.admit(
+                    &message.value.message,
+                    entry.coverage,
+                    received_time.serviced(),
+                ) {
+                    if let Some(coverage) = entry.coverage {
+                        context
+                            .control
+                            .request_status_confirmation(key, coverage)
+                            .map_err(SignallingError::Am)?;
+                    }
+                    dormancy::answered(context);
+                    return Ok(key);
+                }
                 if context
                     .reports
                     .admit(entry.bearer, &message.value.message)?
@@ -1480,6 +1516,13 @@ impl CommonSignalling {
         {
             context.activity = context.activity.saturating_add(1);
         }
+        if matches!(
+            entry.bearer,
+            SignallingBearer::NasAm | SignallingBearer::LowPriorityNasAm
+        ) && let Some(context) = self.registry.get_mut(key)
+        {
+            context.nas_waits_release = matches!(result, Err(SignallingError::Capacity));
+        }
         if matches!(result, Err(SignallingError::Capacity)) {
             self.counters.backpressure = self.counters.backpressure.saturating_add(1);
             if self.counters.backpressure.is_power_of_two() {
@@ -1504,9 +1547,11 @@ impl CommonSignalling {
                 );
             }
         } else {
+            // A direct transfer for a connection released while it waited has no destination.
             if result.is_err()
                 && result != Err(SignallingError::RegistrationPending)
                 && result != Err(SignallingError::Duplicate)
+                && result != Err(SignallingError::Nas(NasError::Domain))
             {
                 self.counters.rejected = self.counters.rejected.saturating_add(1);
                 const INITIAL_REJECTION_REPORTS: u64 = 16;

@@ -150,7 +150,7 @@ rel99:
         maximum_blocks: 1
       physical_candidates:
       - tpc_algorithm: algorithm-2
-        dpcch_offset_db: -80
+        dpcch_offset_db: -116
       services:
         circuit:
         - name: amr-narrowband-core-contract

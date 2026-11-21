@@ -47,6 +47,8 @@ pub struct CommonUmBearer {
     key: UeKey,
     header: CommonHeader,
     fach: FachTransport,
+    utran: Option<FachTransport>,
+    address_utran: bool,
     tx: UmTransmitter,
     rx: UmReceiver,
     input: Vec<u8>,
@@ -107,6 +109,8 @@ impl CommonUmBearer {
             key,
             header,
             fach,
+            utran: None,
+            address_utran: false,
             tx: UmTransmitter::new(config, tx_limits).map_err(CommonUmError::Rlc)?,
             rx: UmReceiver::new(config, rx_limits).map_err(CommonUmError::Rlc)?,
             input: vec![0; rx_limits.maximum_pdu_bytes.get()],
@@ -114,6 +118,40 @@ impl CommonUmBearer {
             prepared_tx: vec![0; tx_limits.maximum_pdu_bytes.get()],
             rrc: vec![0; tx_limits.maximum_sdu_bytes.get()],
         })
+    }
+    /// Prepares downlink addressing by U-RNTI. TS 25.321 9.2.1.1 allows it for DCCH on UM
+    /// only, and a UE that left CELL_PCH or URA_PCH has no C-RNTI until it is given one.
+    pub fn with_utran_identity(
+        mut self,
+        source: &dyn CommonTxTarget,
+        channel: usize,
+        urnti: u32,
+    ) -> Result<Self, CommonUmError> {
+        let CommonHeader::Dedicated {
+            channel: logical, ..
+        } = self.header
+        else {
+            return Err(CommonUmError::Profile);
+        };
+        let mut utran = FachTransport::new(
+            source,
+            channel,
+            CommonHeader::Dedicated {
+                identity: CommonIdentity::Utran(urnti),
+                channel: logical,
+            },
+        )
+        .map_err(CommonUmError::Fach)?;
+        utran.bind_ue(self.key).map_err(CommonUmError::Fach)?;
+        self.utran = Some(utran);
+        Ok(self)
+    }
+    pub fn address_by_urnti(&mut self, enabled: bool) -> Result<(), CommonUmError> {
+        if enabled && self.utran.is_none() {
+            return Err(CommonUmError::Profile);
+        }
+        self.address_utran = enabled;
+        Ok(())
     }
     pub fn enqueue(&mut self, key: UeKey, encoded: Bits<'_>) -> Result<(), CommonUmError> {
         if key != self.key {
@@ -237,10 +275,12 @@ impl CommonUmBearer {
         prepare: impl FnOnce(UmPublication<'_>, &mut [u8]) -> Result<(), E>,
     ) -> Result<bool, CommonUmPreparedError<E>> {
         let fail = CommonUmPreparedError::Bearer;
-        self.fach
-            .validate(source, start)
+        let fach = match self.utran.as_mut().filter(|_| self.address_utran) {
+            Some(utran) => utran,
+            None => &mut self.fach,
+        };
+        fach.validate(source, start)
             .map_err(|error| fail(CommonUmError::Fach(error)))?;
-        let fach = &mut self.fach;
         publish_payload_prepared(
             &mut self.tx,
             &mut self.prepared_tx,

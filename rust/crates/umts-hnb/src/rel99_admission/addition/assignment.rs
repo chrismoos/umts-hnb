@@ -111,7 +111,6 @@ impl AdditionalAssignment {
         }
     }
 
-    #[cfg(test)]
     pub fn request(&self) -> umts_iuh::session::RabRequest {
         self.source.pending().request()
     }
@@ -164,7 +163,17 @@ impl AdditionalAssignment {
         if self.outcomes_recorded() {
             return Ok(true);
         }
-        let outcomes = self.media.outcomes();
+        // A superseded request has no media and no response. Its bearers exist at the UE,
+        // so they are recorded for the Iu release to remove.
+        let outcomes = if gateway.rab_superseded(self.source.pending().request()) {
+            let mut outcomes = RabOutcomeIds::default();
+            for item in &self.source.pending().assignment().setup {
+                outcomes.record_resolved(item.first.id.get(), true);
+            }
+            outcomes
+        } else {
+            self.media.outcomes()
+        };
         if outcomes.resolved().len() != self.source.pending().assignment().setup.len() {
             return Ok(false);
         }
@@ -296,6 +305,19 @@ impl Rel99Admission {
             .map(|frame| frame.start.index.checked_add(CHIPS_PER_FRAME))
             .unwrap_or(Some(entry.next_frame.index))
             .ok_or(AdditionalMediaError::Admission(AdmissionError::Time))?;
+        if services
+            .core
+            .gateway()
+            .rab_superseded(assignment.source.pending().request())
+        {
+            return assignment.promote(
+                entry
+                    .inventory
+                    .as_mut()
+                    .ok_or(AdditionalMediaError::Admission(AdmissionError::Phase))?,
+                services.core.gateway(),
+            );
+        }
         match &mut assignment.media {
             RequestMedia::Packet(state) => {
                 if state.needs_preparation() {
