@@ -191,6 +191,7 @@ pub(super) fn ready_to_publish(
 ) -> Result<bool, SignallingError> {
     if context.setup.phase() != umts_rrc::establishment::EstablishmentPhase::Established
         || context.bearer_change.is_some()
+        || context.dormancy.parking()
         || context.idle_release.is_some()
         || context.control.pending_new_data()
         || context.nas_bearer.pending_new_data()

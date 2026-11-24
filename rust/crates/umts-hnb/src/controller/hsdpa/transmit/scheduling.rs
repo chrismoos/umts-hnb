@@ -155,6 +155,11 @@ impl<T: Transport> CommonController<T> {
             let feedback = match feedback {
                 Ok(timing) => timing,
                 Err(reason) => {
+                    // A parked UE has already released its dedicated receiver.
+                    if self.radio.parked(identity.ue).is_some() {
+                        report.deferred += 1;
+                        continue;
+                    }
                     report.failures += 1;
                     if report.first_failure.is_none() {
                         report.first_failure = Some((identity, reason));

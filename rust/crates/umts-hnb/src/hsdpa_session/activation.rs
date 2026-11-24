@@ -250,12 +250,16 @@ impl RetainedDpchPolicy {
         h_rnti: u16,
         mac_ehs: bool,
     ) -> Result<InitialConfiguration> {
+        // The HS-DSCH scheduler skips a lent data code for every UE.
+        let lent = crate::radio_resources::lent_data_codes();
         for &index in &dedicated.physical().downlink_codes {
             let retained = OvsfCode::new(dedicated.physical().downlink_sf, index)
                 .map_err(|error| anyhow!("retained DPCH code: {error:?}"))?;
             ensure!(
                 dedicated.physical().secondary_scrambling.is_some()
-                    || !codes.data_codes().any(|code| code.overlaps(retained)),
+                    || !codes
+                        .data_codes()
+                        .any(|code| { code.overlaps(retained) && lent & (1 << code.index()) == 0 }),
                 "HSDPA data codes overlap the retained DPCH"
             );
         }
@@ -535,6 +539,40 @@ mod tests {
                 .message(umts_rrc::establishment::TransactionId::new(0).unwrap())
                 .unwrap();
         }
+        resources.release_hsdpa(lease).unwrap();
+    }
+
+    #[test]
+    fn retained_dpch_may_use_only_a_lent_data_code() {
+        let config = config();
+        let policy = RetainedDpchPolicy::new(&config.hspa.downlink, 6.0).unwrap();
+        let source = source(true);
+        let mut resources =
+            RadioResources::new(at(0).epoch, source.information(), count(2), 0..=1).unwrap();
+        let lease = resources
+            .reserve_hsdpa(NonZeroU8::new(5).unwrap(), NonZeroU8::MIN)
+            .unwrap();
+        let data = lease.codes().data_codes().next().unwrap();
+        let (ul, dl, bearers, mut physical) = rel99::components(false, true, 10);
+        let per_data_code = physical.downlink_sf / 16;
+        physical.downlink_codes = vec![data.index() * per_data_code];
+        physical.secondary_scrambling = None;
+        let dedicated = Arc::new(Rel99Configuration::new(ul, dl, bearers, physical).unwrap());
+        let category = Category::new(6).unwrap();
+        let activation = ScheduledActivation::new(at(0), 0, NonZeroU8::new(4).unwrap()).unwrap();
+        crate::radio_resources::set_lent_data_codes(0);
+        assert!(
+            policy
+                .construct(dedicated.clone(), category, *lease.codes(), 1, activation)
+                .is_err()
+        );
+        crate::radio_resources::set_lent_data_codes(1 << data.index());
+        assert!(
+            policy
+                .construct(dedicated, category, *lease.codes(), 1, activation)
+                .is_ok()
+        );
+        crate::radio_resources::set_lent_data_codes(0);
         resources.release_hsdpa(lease).unwrap();
     }
 

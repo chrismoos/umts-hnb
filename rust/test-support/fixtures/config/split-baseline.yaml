@@ -61,7 +61,7 @@ power_control:
       e_hich_percent: 0.16282548
     dedicated:
       downlink_offset_db: 0.0
-      downlink_minimum_offset_db: -6.0
+      downlink_minimum_offset_db: 0.0
       tpc_offset_db: 6.0
       tpc_initial_maximum_slots: 9000
 hspa:

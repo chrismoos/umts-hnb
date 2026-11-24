@@ -77,6 +77,21 @@ struct FrameDefinition {
 }
 
 impl DedicatedBearers {
+    pub(crate) fn reset_evidence(
+        &self,
+    ) -> impl Iterator<Item = (BearerId, umts_rlc::acknowledged::ResetStart)> + '_ {
+        self.endpoints
+            .iter()
+            .filter_map(|endpoint| match &endpoint.entity {
+                Entity::Acknowledged(entity) => entity
+                    .diagnostics()
+                    .history
+                    .reset_started
+                    .map(|reset| (endpoint.id, reset)),
+                _ => None,
+            })
+    }
+
     fn frame_error(&self, bearer: BearerId, error: BearerError) -> FrameBuildError {
         match error {
             BearerError::Am(error) => {

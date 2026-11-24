@@ -226,6 +226,8 @@ pub enum IngressWork {
     },
 }
 
+const HELD_DOWNLINK_NAS: usize = 16;
+
 struct Context {
     reports: Reports,
     transition_reservation: Option<delivery::Reservation>,
@@ -254,6 +256,7 @@ struct Context {
     core_imsi: Option<Imsi>,
     identification: Option<Identification>,
     deferred: DeferredNas,
+    held_nas: std::collections::VecDeque<(CoreConnection, DownlinkPriority, Vec<u8>)>,
     access_release: AccessRelease,
     supports_csg: bool,
     emergency: bool,
@@ -615,6 +618,7 @@ impl CommonSignalling {
         let Some((key, _)) = self.registry.at_slot(slot) else {
             return Ok(SecurityWork::Idle);
         };
+        self.release_held_nas(key);
         let context = self.registry.get_mut(key).expect("occupied security owner");
         if context.security.phase(domain) == connection_security::Phase::Retired {
             return Ok(SecurityWork::Idle);
@@ -1006,6 +1010,7 @@ impl CommonSignalling {
                         activity: 0,
                         idle_release: None,
                         release_after_core_disconnect: false,
+                        held_nas: std::collections::VecDeque::new(),
                         nas_waits_release: false,
                         dormancy: dormancy::Dormancy::default(),
                         transactions: transactions::Transactions::default(),
@@ -1631,6 +1636,55 @@ impl CommonSignalling {
         priority: DownlinkPriority,
         nas: &[u8],
     ) -> Result<(), SignallingError> {
+        let key = connection.key.ue;
+        let context = self.registry.get(key).ok_or(SignallingError::Origin)?;
+        if context.held_nas.is_empty() {
+            match self.submit_downlink_nas(connection, priority, nas) {
+                Err(SignallingError::Capacity) => (),
+                other => return other,
+            }
+        }
+        // TS 25.331 8.1.12.3: held per UE so one security procedure does not stall the core queue.
+        let context = self.registry.get_mut(key).ok_or(SignallingError::Origin)?;
+        if context.held_nas.len() >= HELD_DOWNLINK_NAS {
+            return Err(SignallingError::Capacity);
+        }
+        context
+            .held_nas
+            .push_back((connection, priority, nas.to_vec()));
+        Ok(())
+    }
+
+    fn release_held_nas(&mut self, key: UeKey) {
+        loop {
+            let Some((connection, priority, nas)) = self
+                .registry
+                .get_mut(key)
+                .and_then(|context| context.held_nas.pop_front())
+            else {
+                return;
+            };
+            match self.submit_downlink_nas(connection, priority, &nas) {
+                Ok(()) => (),
+                Err(SignallingError::Capacity) => {
+                    if let Some(context) = self.registry.get_mut(key) {
+                        context.held_nas.push_front((connection, priority, nas));
+                    }
+                    return;
+                }
+                Err(error) => {
+                    tracing::warn!("Held downlink NAS discarded: key={key:?} error={error:?}");
+                }
+            }
+        }
+    }
+
+    fn submit_downlink_nas(
+        &mut self,
+        connection: CoreConnection,
+        priority: DownlinkPriority,
+        nas: &[u8],
+    ) -> Result<(), SignallingError> {
         let context = self
             .registry
             .get_mut(connection.key.ue)
@@ -1774,10 +1828,12 @@ impl CommonSignalling {
                     || context.nas_bearer.state() == AmState::Failed;
                 if expired || failed {
                     tracing::warn!(
-                        "RRC context retired: ue={key:?} setup_phase={:?} expired={expired} control={:?} nas={:?}",
+                        "RRC context retired: ue={key:?} setup_phase={:?} expired={expired} control={:?} nas={:?} control_reset={:?} nas_reset={:?}",
                         context.setup.phase(),
                         context.control.state(),
-                        context.nas_bearer.state()
+                        context.nas_bearer.state(),
+                        context.control.reset_started(),
+                        context.nas_bearer.reset_started()
                     );
                     self.retire(key)?;
                     retired += 1;

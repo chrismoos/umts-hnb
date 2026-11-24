@@ -146,7 +146,7 @@ fn voice_first_release_restores_original_packet_capacity_without_replacing_beare
     );
 }
 #[test]
-fn voice_release_shrinks_the_channel_only_to_return_a_borrowed_code() {
+fn voice_release_keeps_the_channel_even_under_a_borrowed_code() {
     use crate::rel99_planner::tests::{cs_request, reference_transport_limits};
     let config: umts_config::Config = serde_yaml::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -191,7 +191,19 @@ fn voice_release_shrinks_the_channel_only_to_return_a_borrowed_code() {
     crate::radio_resources::set_lent_data_codes(u32::MAX);
     let restored = release();
     crate::radio_resources::set_lent_data_codes(0);
-    assert_eq!(sf(restored.compiled()), smallest);
+    assert_eq!(sf(restored.compiled()), sf(combined.compiled()));
+    assert_eq!(
+        restored
+            .compiled()
+            .configuration()
+            .physical()
+            .downlink_codes,
+        combined
+            .compiled()
+            .configuration()
+            .physical()
+            .downlink_codes
+    );
     assert_eq!(
         restored
             .compiled()

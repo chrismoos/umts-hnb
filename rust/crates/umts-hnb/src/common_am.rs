@@ -174,6 +174,20 @@ impl CommonAmBearer {
     pub fn state(&self) -> AmState {
         self.rlc.state()
     }
+    pub fn reset_started(&self) -> Option<umts_rlc::acknowledged::ResetStart> {
+        self.rlc.diagnostics().history.reset_started
+    }
+    pub fn note_unaccepted_data(
+        &mut self,
+        key: UeKey,
+        time: umts_rlc::acknowledged::ReceiveTime,
+        sequence: u16,
+    ) -> Result<(), CommonAmError> {
+        self.origin(key)?;
+        self.rlc
+            .note_unaccepted_data(time, sequence)
+            .map_err(CommonAmError::Rlc)
+    }
     pub fn tick(&mut self, now: ChipInstant) -> Result<(), CommonAmError> {
         self.rlc.tick(now).map_err(CommonAmError::Rlc)
     }

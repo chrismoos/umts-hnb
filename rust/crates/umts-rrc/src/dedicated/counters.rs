@@ -70,6 +70,23 @@ impl SetupCounters {
         }
         self
     }
+    /// TS 25.331 8.5.9, 8.2.2.4: the latest START transmitted for the domain.
+    pub fn unprotected_with(
+        mut self,
+        domains: [bool; 2],
+        unprotected: [bool; 2],
+        latest: DomainStarts,
+    ) -> Self {
+        let value = match (domains, unprotected) {
+            ([true, false], [true, _]) => self.domain_starts.cs.or(latest.cs),
+            ([false, true], [_, true]) => self.domain_starts.ps.or(latest.ps),
+            _ => None,
+        };
+        if self.new_bearer_start.is_none() {
+            self.new_bearer_start = value.and_then(|value| Start::new(value).ok());
+        }
+        self
+    }
     pub fn domain_starts(self) -> DomainStarts {
         self.domain_starts
     }
@@ -181,6 +198,69 @@ mod tests {
         assert_eq!(empty.new_bearer_start(), None);
         assert_eq!(empty.domain_starts(), DomainStarts::default());
         assert_eq!(empty.transparent_cfn(), None);
+    }
+
+    #[test]
+    fn unprotected_domain_without_start_takes_the_latest_transmitted_start() {
+        let latest = DomainStarts {
+            cs: Some(11),
+            ps: Some(22),
+        };
+        let empty = SetupCounters::from_complete(&complete()).unwrap();
+        let ps = [false, true];
+        assert_eq!(
+            empty
+                .unprotected_with(ps, [false, true], latest)
+                .new_bearer_start()
+                .map(Start::get),
+            Some(22)
+        );
+        assert_eq!(
+            empty
+                .unprotected_with([true, false], [true, false], latest)
+                .new_bearer_start()
+                .map(Start::get),
+            Some(11)
+        );
+        assert_eq!(
+            empty
+                .unprotected_with(ps, [true, false], latest)
+                .new_bearer_start(),
+            None,
+            "a protected domain still requires the START"
+        );
+        assert_eq!(
+            empty
+                .unprotected_with([true, true], [true, true], latest)
+                .new_bearer_start(),
+            None,
+            "a two-domain setup has no single default"
+        );
+        let mut listed = complete();
+        listed.ul_counter_synchronisation_info = Some(ie::ULCounterSynchronisationInfo::new(
+            None,
+            ie::STARTList(vec![ie::STARTSingle::new(
+                ie::CNDomainIdentity::ps_domain,
+                value(33),
+            )]),
+        ));
+        let listed = SetupCounters::from_complete(&listed).unwrap();
+        assert_eq!(
+            listed
+                .unprotected_with(ps, [false, true], latest)
+                .new_bearer_start()
+                .map(Start::get),
+            Some(33)
+        );
+        let mut sent = complete();
+        sent.start_value = Some(value(44));
+        let sent = SetupCounters::from_complete(&sent).unwrap();
+        assert_eq!(
+            sent.unprotected_with(ps, [false, true], latest)
+                .new_bearer_start()
+                .map(Start::get),
+            Some(44)
+        );
     }
 
     #[test]

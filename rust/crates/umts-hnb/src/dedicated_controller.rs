@@ -1267,6 +1267,11 @@ impl DedicatedController {
             match service(identity.ue, &mut entry.bank) {
                 Ok(_) => {}
                 Err(error) => {
+                    for (bearer, reset) in entry.bank.reset_evidence() {
+                        tracing::warn!(
+                            "Dedicated bearer reset before failure: identity={identity:?} bearer={bearer:?} reset={reset:?}"
+                        );
+                    }
                     entry.phase = DedicatedPhase::Faulted;
                     entry.failure = Some(DedicatedControlError::Processing);
                     report.failure = Some((identity, error));

@@ -63,6 +63,13 @@ pub(super) struct Dormancy {
     pub(super) deferred: Option<DeferredUpdate>,
 }
 
+impl Dormancy {
+    /// A park was requested and the UE is not parked yet.
+    pub(super) fn parking(&self) -> bool {
+        self.request.is_some()
+    }
+}
+
 pub(super) struct DeferredUpdate {
     pub(super) bytes: Vec<u8>,
     pub(super) bit_length: usize,
@@ -197,6 +204,7 @@ impl CommonSignalling {
         // A UE in CELL_FACH needs its C-RNTI, which a returning UE has once it answered.
         if context.dormancy.request.is_some()
             || context.dormancy.parked.is_some()
+            || context.bearer_change.is_some()
             || context.dormancy.confirm_unanswered
             || context.dormancy.deferred.is_some()
             || context.dormancy.resuming

@@ -253,7 +253,7 @@ power_control:
     common_channel_offset_db: 0.0
     dedicated:
       downlink_offset_db: 0.0
-      downlink_minimum_offset_db: -6.0
+      downlink_minimum_offset_db: 0.0
       tpc_offset_db: 6.0
       tpc_maximum_observation_age_chips: 10240
       tpc_initial_maximum_slots: 9000

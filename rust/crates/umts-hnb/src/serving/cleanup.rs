@@ -800,9 +800,15 @@ fn report_rejected_release<T: Transport>(
         change,
         rollback_error,
     } = *rejected;
+    // TS 25.413 8.5: an Iu release supersedes the RAB release, which then needs no response.
+    let superseded = gateway.rab_superseded(request);
     match FailedRabAssignment::new(pending, cause(), gateway) {
         Ok(reporting) => {
-            report.failed(CleanupFailure::RejectedRelease { request, error });
+            if superseded {
+                tracing::debug!(?request, "RAB release superseded by Iu release");
+            } else {
+                report.failed(CleanupFailure::RejectedRelease { request, error });
+            }
             Some(State::Reporting(reporting))
         }
         Err(failed) => {

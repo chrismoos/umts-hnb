@@ -106,6 +106,9 @@ impl<T: Transport> CommonController<T> {
         let Some(admission) = self.admission.as_ref() else {
             return Ok(IuReleaseLaunch::Pending);
         };
+        if admission.transition_in_flight(previous) {
+            return Ok(IuReleaseLaunch::Pending);
+        }
         let authority = admission
             .prepare_iu_radio_release(previous, request, self.core.gateway())
             .map_err(|error| reject(ReleaseAdmissionError::Core(error)))?;

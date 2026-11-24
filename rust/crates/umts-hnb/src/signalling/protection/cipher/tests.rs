@@ -179,7 +179,7 @@ fn command_validation_rejects_activation_inside_the_sdu_and_a_span_that_crosses_
 }
 
 #[test]
-fn pending_control_cipher_requires_ordered_retry_without_consuming_unknown_cipher_pdus() {
+fn pending_control_cipher_drops_out_of_order_pdus_and_never_consumes_unknown_cipher_pdus() {
     let source = source(false);
     let mut controller = controller(&source);
     let key = establish(&mut controller, &source, 0);
@@ -237,10 +237,7 @@ fn pending_control_cipher_requires_ordered_retry_without_consuming_unknown_ciphe
         .unwrap()
         .control
         .window_positions();
-    assert_eq!(
-        receive(&mut controller, &pdus[1]),
-        Err(SignallingError::Capacity)
-    );
+    assert_eq!(receive(&mut controller, &pdus[1]), Ok(()));
     assert_eq!(
         controller
             .registry

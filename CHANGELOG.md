@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Fewer dropped connections when calls end, packet bearers are added and handsets park.
 - Added `rrc.dormancy` to park inactive packet handsets in CELL_PCH or URA_PCH after 20 s without traffic.
 - Reduced HSDPA activation time and memory use per handset.
 - Fewer dropped connections during calls and when a second handset joins.

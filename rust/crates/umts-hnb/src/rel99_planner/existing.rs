@@ -231,7 +231,17 @@ pub fn plan_existing(
         policy.hsdpa,
     )?;
     let mut failure = Error::Capacity;
-    for template in policy.physical {
+    // A higher spreading factor is tried last, because SF256 punctures the signalling DCH.
+    let current = previous.configuration().physical().downlink_sf;
+    let fitting = policy
+        .physical
+        .iter()
+        .filter(|template| template.downlink_sf <= current);
+    let narrower = policy
+        .physical
+        .iter()
+        .filter(|template| template.downlink_sf > current);
+    for template in fitting.chain(narrower) {
         let result = (|| {
             let old = previous.configuration().physical();
             let mut physical = template.clone();

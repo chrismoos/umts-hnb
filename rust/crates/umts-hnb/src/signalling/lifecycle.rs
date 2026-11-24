@@ -140,7 +140,10 @@ impl CommonSignalling {
                 ),
                 IdleBlocker::Registration,
             ),
-            (!context.deferred.is_empty(), IdleBlocker::DeferredNas),
+            (
+                !context.deferred.is_empty() || !context.held_nas.is_empty(),
+                IdleBlocker::DeferredNas,
+            ),
             (
                 pending_am_transmit(&context.control),
                 IdleBlocker::ControlTransmit,

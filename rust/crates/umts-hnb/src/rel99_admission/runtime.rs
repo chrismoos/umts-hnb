@@ -620,7 +620,9 @@ fn stop(
     receive: &mut DedicatedController,
 ) -> Result<(), AdmissionError> {
     if !entry.recovery_marked {
-        if entry.setup_authority {
+        let parked_complete = matches!(entry.failure, Some(AdmissionError::Parked))
+            && entry.procedure.phase() == umts_rrc::dedicated::SetupPhase::Complete;
+        if entry.setup_authority && !parked_complete {
             entry
                 .procedure
                 .local_failure(now)

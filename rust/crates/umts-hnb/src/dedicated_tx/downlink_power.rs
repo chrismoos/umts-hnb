@@ -4,8 +4,8 @@ use super::*;
 
 const MAXIMUM_ATTENUATION_DB: usize = 60;
 const TPC_STEP_DB: f32 = 1.0;
-// The nominal power fits every handset the cell can hold. Fewer handsets leave the rest unused.
-pub(crate) const MAXIMUM_BOOST_DB: u8 = 6;
+// Upper bound. The per-slot limit in mix_slot_checked is usually lower.
+pub(crate) const MAXIMUM_BOOST_DB: u8 = 12;
 
 #[derive(Clone, Copy, Debug)]
 pub struct DownlinkPowerSettings {
@@ -129,6 +129,11 @@ impl DownlinkPower {
             / self.gains[usize::from(self.counters.boost_db)]
     }
 
+    pub fn level(&self) -> f32 {
+        let db = f32::from(self.counters.boost_db) - f32::from(self.counters.attenuation_db);
+        10.0_f32.powf(db * TPC_STEP_DB / 10.0)
+    }
+
     pub fn limit_boost(&mut self, limit: u8) {
         self.boost_limit = limit.min(MAXIMUM_BOOST_DB);
         self.counters.boost_db = self.counters.boost_db.min(self.boost_limit);
@@ -169,11 +174,12 @@ mod tests {
         };
         step(&mut power, DownlinkCommand::Up);
         assert_eq!((power.counters.boost_db, power.counters.clamped), (0, 1));
-        power.limit_boost(9);
+        power.limit_boost(6);
         for _ in 0..8 {
             step(&mut power, DownlinkCommand::Up);
         }
-        assert_eq!(power.counters.boost_db, MAXIMUM_BOOST_DB);
+        assert_eq!(power.counters.boost_db, 6);
+        assert!((power.level() - 10.0_f32.powf(0.6)).abs() < 1e-4);
         assert!((power.latch_gain(at(100)) - 10.0_f32.powf(6.0 / 20.0)).abs() < 1e-5);
         step(&mut power, DownlinkCommand::Down);
         assert_eq!(
@@ -182,6 +188,11 @@ mod tests {
         );
         power.limit_boost(2);
         assert_eq!(power.counters.boost_db, 2);
+        power.limit_boost(u8::MAX);
+        for _ in 0..20 {
+            step(&mut power, DownlinkCommand::Up);
+        }
+        assert_eq!(power.counters.boost_db, MAXIMUM_BOOST_DB);
     }
 
     #[test]

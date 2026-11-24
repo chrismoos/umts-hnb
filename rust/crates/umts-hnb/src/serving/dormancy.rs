@@ -54,6 +54,7 @@ struct Watch {
     parking: Option<(Option<ReceiveIdentity>, ChipInstant)>,
     retry_at: u64,
     session_end: bool,
+    ended: bool,
     updates: u64,
     updated: ChipInstant,
 }
@@ -171,6 +172,7 @@ impl Dormancy {
                 parking: None,
                 retry_at: 0,
                 session_end: false,
+                ended: false,
                 updates: 0,
                 updated: now,
             });
@@ -183,6 +185,7 @@ impl Dormancy {
                     parking: None,
                     retry_at: 0,
                     session_end: false,
+                    ended: false,
                     updates: 0,
                     updated: now,
                 };
@@ -194,6 +197,7 @@ impl Dormancy {
                 if packets > watch.packets && controller.radio_mut().page_parked(key) {
                     self.counters.paged = self.counters.paged.saturating_add(1);
                 }
+                watch.ended &= packets == watch.packets;
                 watch.packets = packets;
                 watch.since = now;
                 let updates = controller.radio().parked_updates(key);
@@ -258,6 +262,7 @@ impl Dormancy {
             }
             if watch.signalling != candidate.activity || watch.packets != packets {
                 watch.signalling = candidate.activity;
+                watch.ended &= packets == watch.packets;
                 watch.packets = packets;
                 watch.since = now;
                 watch.session_end = false;
@@ -285,11 +290,40 @@ impl Dormancy {
             {
                 continue;
             }
+            // TS 25.331 8.1.14.3: a repeated session-end indication is answered with a release.
+            if watch.session_end
+                && watch.ended
+                && identity.is_some()
+                && let Some(connection) = candidate.connections[1]
+            {
+                watch.session_end = false;
+                watch.ended = false;
+                watch.retry_at = now.index.saturating_add(RETRY_SECONDS * CHIPS_PER_SECOND);
+                match controller
+                    .radio_mut()
+                    .request_inactivity_release(connection)
+                {
+                    Ok(()) => {
+                        self.counters.released = self.counters.released.saturating_add(1);
+                        tracing::info!(
+                            "Parked UE repeated its session end and is released: slot={} generation={}",
+                            key.slot,
+                            key.generation
+                        );
+                    }
+                    Err(error) => {
+                        tracing::warn!("Session end release failed: key={key:?} error={error:?}");
+                    }
+                }
+                continue;
+            }
+            let ended = watch.session_end;
             match controller
                 .radio_mut()
                 .request_park(key, settings.state, settings.drx_coefficient)
             {
                 Ok(true) => {
+                    watch.ended = ended;
                     watch.session_end = false;
                     watch.parking = Some((identity, now));
                     self.counters.requested = self.counters.requested.saturating_add(1);

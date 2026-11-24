@@ -170,15 +170,28 @@ impl SignallingReceiver<'_> {
                     .status_deferral(key)
                     .map_err(SignallingError::Am)?
                     .is_some());
+        let mut unresolved = None;
+        let mut abandoned = false;
+        let recovery = matches!(
+            self.admission,
+            super::protection::ControlAdmission::RecoveryRequired { .. }
+        );
         let result = am.receive_payload_prepared_timed(key, time, payload, |preparation, bytes| {
             match preparation {
-                ReceivePreparation::Data { position, .. } => {
+                ReceivePreparation::Data { position, sequence } => {
                     // SRB2 may send new-cipher traffic without waiting for Complete's RLC acknowledgment.
-                    if pending_cipher.is_some()
-                        && bearer == SignallingBearer::ControlAm
-                        && (control_pending || position != positions.next_receive)
-                    {
-                        return Err(SignallingError::Capacity);
+                    if pending_cipher.is_some() && bearer == SignallingBearer::ControlAm {
+                        if position != positions.next_receive {
+                            // TS 25.331 8.1.12.3: undecipherable until SECURITY MODE COMPLETE.
+                            // Dropped so the UE retransmits it.
+                            unresolved = Some(sequence);
+                            return Err(SignallingError::Capacity);
+                        }
+                        if control_pending {
+                            // The command timed out, so nothing will clear the hold.
+                            abandoned = recovery;
+                            return Err(SignallingError::Capacity);
+                        }
                     }
                     ciphers
                         .apply(
@@ -247,6 +260,16 @@ impl SignallingReceiver<'_> {
         });
         match result {
             Ok(_) => Ok(()),
+            Err(CommonAmPreparedError::Preparation(SignallingError::Capacity))
+                if unresolved.is_some() =>
+            {
+                let sequence = unresolved.expect("checked above");
+                am.note_unaccepted_data(key, time, sequence)
+                    .map_err(SignallingError::Am)
+            }
+            Err(CommonAmPreparedError::Preparation(SignallingError::Capacity)) if abandoned => {
+                Ok(())
+            }
             Err(CommonAmPreparedError::Bearer(error)) => Err(SignallingError::Am(error)),
             Err(CommonAmPreparedError::Preparation(error)) => {
                 if matches!(

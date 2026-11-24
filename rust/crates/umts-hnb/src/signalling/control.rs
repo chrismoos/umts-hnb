@@ -113,6 +113,7 @@ impl<'a> ReceivedControl<'a> {
         let prior_starts = pending.prior_starts;
         let domains = counters::setup_domains(procedure.rabs());
         let resume = procedure.mode() == umts_rrc::dedicated::SetupMode::Resume;
+        let unprotected = [security.cs.is_none(), security.ps.is_none()];
         let result = procedure
             .response_with(self.key, self.time, self.message, |counters| {
                 let counters = if resume {
@@ -125,7 +126,7 @@ impl<'a> ReceivedControl<'a> {
                     );
                     resumed
                 } else {
-                    counters
+                    counters.unprotected_with(domains, unprotected, prior_starts)
                 };
                 security.admit_starts_with(
                     self.key,
@@ -296,13 +297,6 @@ impl<'a> ReceivedControl<'a> {
         Ok(response)
     }
 }
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Retains the complete typed result and resource custody."
-    )
-)]
 pub struct ControlSecurity<'a> {
     router: &'a mut umts_rrc::nas::NasRouter,
     route: Option<crate::dedicated_rx::ReceiveIdentity>,

@@ -92,6 +92,14 @@ impl Rel99Admission {
             .and_then(Option::as_ref)
             .is_some_and(|entry| entry.identity.ue == key)
     }
+    pub fn transition_in_flight(&self, previous: ReceiveIdentity) -> bool {
+        self.entry(previous).is_some_and(|entry| {
+            entry.lifecycle.phase() == AdmissionPhase::Active
+                && entry.failure.is_none()
+                && !entry.lifecycle.is_idle()
+        })
+    }
+
     pub fn prepare_iu_radio_release<C: Transport>(
         &self,
         previous: ReceiveIdentity,

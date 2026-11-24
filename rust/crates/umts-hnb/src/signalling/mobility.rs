@@ -257,6 +257,45 @@ impl CommonSignalling {
         Ok(())
     }
 
+    /// TS 25.331 8.1.4.2: the release goes on the CCCH, because integrity state is unknown.
+    pub(crate) fn release_unanswered_security(
+        &mut self,
+        key: UeKey,
+        transaction: TransactionId,
+    ) -> Result<bool, SignallingError> {
+        let context = self.registry.get_mut(key).ok_or(SignallingError::Origin)?;
+        if context.dedicated_route.is_some() || context.dormancy.parked.is_some() {
+            return Ok(false);
+        }
+        let release = build_signalling_failure_release(context.setup.assigned(), transaction)
+            .map_err(SignallingError::Mobility)?;
+        let core_context = match context.registration {
+            Registration::Active(id) => Some(id),
+            _ => None,
+        };
+        let connections = context
+            .router
+            .as_ref()
+            .map_or([None; 2], NasRouter::connections);
+        let pending = context.registration == Registration::Pending;
+        let rb0 = &mut self.rb0;
+        self.core
+            .push_radio_failure_with(key, core_context, pending, connections, || {
+                rb0.enqueue(
+                    Bits::new(&release.bytes, release.bit_length)
+                        .map_err(|_| SignallingError::Message)?,
+                )
+                .map_err(SignallingError::Common)
+            })?;
+        self.retire_admitted(key);
+        tracing::warn!(
+            "Connection released after an unanswered security mode command: slot={} generation={}",
+            key.slot,
+            key.generation
+        );
+        Ok(true)
+    }
+
     fn release_decoded_update(
         &mut self,
         key: UeKey,

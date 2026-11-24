@@ -570,6 +570,18 @@ impl<T: Transport> CommonController<T> {
             self.radio
                 .actuate_security(step.security, now.radio, now.security)
         });
+        if let Some(Ok(SecurityAction::RecoveryRequired {
+            key,
+            origin: Some(_),
+        })) = &security
+            && let Err(error) = self.radio.release_unanswered_security(
+                *key,
+                TransactionId::new(0).expect("valid RRC transaction"),
+            )
+            && !crate::signalling::scheduling::backpressure(&error)
+        {
+            tracing::warn!("Unanswered security release failed: key={key:?} error={error:?}");
+        }
         for domain in self.radio.take_reset_acknowledges().into_iter().flatten() {
             if let Err(error) = self
                 .core

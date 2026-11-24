@@ -181,8 +181,10 @@ impl ReceivedControl<'_> {
         let receipt = pending.receipt;
         let prior_starts = pending.prior_starts;
         let domains = counters::setup_domains(&rabs);
+        let unprotected = [security.cs.is_none(), security.ps.is_none()];
         let result = procedure
             .response_with(key, self.time, self.message, |counters| {
+                let counters = counters.unprotected_with(domains, unprotected, prior_starts);
                 let accepted = AcceptedAdditionalSetup {
                     key,
                     previous_identity,

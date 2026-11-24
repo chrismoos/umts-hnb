@@ -1157,6 +1157,24 @@ impl AmEntity {
             .map_err(fail)
     }
 
+    // TS 25.322 9.7.2: an unaccepted PDU and the gap before it are reported as not received.
+    pub fn note_unaccepted_data(
+        &mut self,
+        time: super::ReceiveTime,
+        sequence: u16,
+    ) -> Result<(), AmError> {
+        let now = time.serviced();
+        self.time(now)?;
+        let offset = distance(sn(self.rx_next), sequence);
+        if offset >= self.config.receive_window.get() {
+            return Ok(());
+        }
+        self.now = now;
+        self.rx_high = self.rx_high.max(self.rx_next + u64::from(offset) + 1);
+        self.status_pending = true;
+        Ok(())
+    }
+
     // TS 25.322 10.3 discards invalid wire values, not internal state or preparation errors.
     fn admit_wire<T>(&mut self, parsed: Result<T, AmError>) -> Result<Option<T>, AmError> {
         match parsed {

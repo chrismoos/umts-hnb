@@ -301,29 +301,8 @@ fn plan_release_restoring(
         &retained,
     )?;
     let old = previous.configuration().physical();
-    let lent = crate::radio_resources::lent_data_codes();
-    let borrows = old.secondary_scrambling.is_none()
-        && old.downlink_codes.iter().any(|code| {
-            let data_code = u32::from(*code) * 16 / u32::from(old.downlink_sf.max(16));
-            lent & (1 << data_code) != 0
-        });
-    let mut candidates: Vec<_> = policy
-        .physical
-        .iter()
-        .filter(|_| borrows)
-        .map(|template| {
-            let mut physical = template.clone();
-            physical.primary_scrambling = old.primary_scrambling;
-            physical.secondary_scrambling = old.secondary_scrambling;
-            physical.uplink_scrambling = old.uplink_scrambling;
-            physical.default_offset_512_chips = old.default_offset_512_chips;
-            physical.frame_offset_256_chips = old.frame_offset_256_chips;
-            physical
-        })
-        .filter(|physical| physical.downlink_sf > old.downlink_sf)
-        .collect();
-    candidates.sort_by_key(|physical| std::cmp::Reverse(physical.downlink_sf));
-    candidates.push(old.clone());
+    // The channel is kept. SF256 punctures the signalling DCH (TS 25.211 Table 11).
+    let candidates = vec![old.clone()];
     let mut failure = Error::Capacity;
     for physical in candidates {
         let compose = || -> Result<Arc<CompiledRel99>, Error> {

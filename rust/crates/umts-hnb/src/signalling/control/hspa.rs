@@ -286,6 +286,7 @@ impl CommonSignalling {
             return Err(SignallingError::Mapping);
         }
         if context.bearer_change.is_some()
+            || context.dormancy.parking()
             || context.protection.bearer_reconfiguration_block().is_some()
             || context.protection.integrity.pending_origin().is_some()
             || [umts_iuh::Domain::Cs, umts_iuh::Domain::Ps]
